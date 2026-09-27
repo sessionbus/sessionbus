@@ -10,14 +10,14 @@ Use your normal login account. Install and authenticate native Codex first,
 then install the Sessionbus host and Codex integration:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/antst/sessionbus/main/deploy/install-host.sh | sh
-curl -fsSL https://raw.githubusercontent.com/antst/sessionbus-peers/main/scripts/install-codex.sh | sh
+curl -fsSL https://raw.githubusercontent.com/sessionbus/sessionbus/main/deploy/install-host.sh | sh
+curl -fsSL https://raw.githubusercontent.com/sessionbus/codex-peer/main/scripts/install-codex.sh | sh
 ```
 
 You can download and inspect these scripts before running them. They select
 published releases and verify their archive checksums. See the
 [host installation instructions](README.md#install-binaries) and
-[product installation instructions](https://github.com/antst/sessionbus-peers#install-a-product-from-a-binary-release)
+[Codex integration installation instructions](https://github.com/sessionbus/codex-peer#install)
 for platform requirements, update order and explicit version selection.
 The peer installer does not install Codex or replace its login or permissions.
 
@@ -45,7 +45,7 @@ their normal native permission settings. Native trust or tool-approval prompts
 still need to be handled in the native interface.
 
 You can substitute another installed peer command, such as `claude-peer`, in
-either terminal. Check its [product README](https://github.com/antst/sessionbus-peers)
+either terminal. Check the [Claude peer README](https://github.com/sessionbus/claude-peer)
 for native naming, activation and delivery differences.
 
 ## Discover, then exchange a message

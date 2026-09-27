@@ -77,8 +77,15 @@ contract also connects sessions of the same product, with no parent relationship
 Six established adapters cover Claude Code, Codex, Grok, Qwen, OpenCode and Kilo;
 Pi and OMP are two additional preview integrations. DSH integration has a
 separate, ongoing release path. Native products, authentication and permissions
-remain prerequisites. See [sessionbus-peers](https://github.com/antst/sessionbus-peers)
-for installers and per-product limits.
+remain prerequisites. Product integration source and per-product limits now live
+in [codex-peer](https://github.com/sessionbus/codex-peer),
+[claude-peer](https://github.com/sessionbus/claude-peer),
+[grok-peer](https://github.com/sessionbus/grok-peer),
+[qwen-peer](https://github.com/sessionbus/qwen-peer),
+[opencode-kilo](https://github.com/sessionbus/opencode-kilo), and
+[pi-omp](https://github.com/sessionbus/pi-omp). The inherited combined v0.5.3
+peer release and its compatibility installers remain in `codex-peer`; the five
+other split product repositories do not yet publish their own releases.
 
 This repository contains the `sessionbus` daemon, `sessionbus-hub` federation
 router, `sessionbus-call` reference caller, `example-peer` Worker and public SDKs.
@@ -89,7 +96,7 @@ A hub is optional for local use and required for the current cross-host path.
 Install the normal host (daemon, reference caller and example worker; no hub):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/antst/sessionbus/main/deploy/install-host.sh | sh
+curl -fsSL https://raw.githubusercontent.com/sessionbus/sessionbus/main/deploy/install-host.sh | sh
 ```
 
 Run `sessionbus --version` (also `-version` or `-v`) to report the binary's
@@ -99,7 +106,7 @@ release and source revision without starting the daemon. Untagged builds report
 Install only the federation hub:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/antst/sessionbus/main/deploy/install-hub.sh | sh
+curl -fsSL https://raw.githubusercontent.com/sessionbus/sessionbus/main/deploy/install-hub.sh | sh
 ```
 
 Linux and macOS, amd64 and arm64 are supported. Run as your normal login user;
@@ -109,18 +116,20 @@ launchd on macOS. Linux needs a working user service manager. Only the selected
 role is restarted. Add `~/.local/bin` to your login PATH if prompted. Existing
 configuration, keys, state and the other role are preserved. An earlier real
 `current` directory is retained under `releases/prior.*/current` when migrating
-to the release symlink. Product peers
-install separately from [sessionbus-peers](https://github.com/antst/sessionbus-peers).
+to the release symlink. Product peers install separately: use the installer in
+[`codex-peer`](https://github.com/sessionbus/codex-peer#install) for Codex, or
+its [historical compatibility installers](https://github.com/sessionbus/codex-peer#links-published-before-the-split)
+for the other products until their split repositories publish releases.
 
 The default is GitHub's **latest stable release** (`SESSIONBUS_VERSION=latest`),
 using its `/releases/latest/download/` endpoint. Prereleases are not selected.
 To pin a published version, set the variable on **sh**, not curl:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/antst/sessionbus/main/deploy/install-host.sh | SESSIONBUS_VERSION=vX.Y.Z sh
+curl -fsSL https://raw.githubusercontent.com/sessionbus/sessionbus/main/deploy/install-host.sh | SESSIONBUS_VERSION=vX.Y.Z sh
 ```
 
-Replace `vX.Y.Z` with an actual [release tag](https://github.com/antst/sessionbus/releases).
+Replace `vX.Y.Z` with an actual [release tag](https://github.com/sessionbus/sessionbus/releases).
 Development builds are opt-in: use `SESSIONBUS_VERSION=development sh` in the
 same pipeline. The rolling development prerelease follows tested `develop`
 builds and can change between installations.
@@ -406,7 +415,7 @@ go vet ./...
 npm test --prefix bus
 ```
 
-Product peers live in [antst/sessionbus-peers](https://github.com/antst/sessionbus-peers).
+Product peer source lives in the [split repositories listed by codex-peer](https://github.com/sessionbus/codex-peer#sessionbus-codex-peer).
 The signed designs are in [`docs/designs`](docs/designs), and the generated
 wire reference is [`bus/docs/PROTOCOL.md`](bus/docs/PROTOCOL.md). The longer
 direction is described in [`docs/END-GOAL.md`](docs/END-GOAL.md).
