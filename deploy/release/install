@@ -155,7 +155,7 @@ printf 'Installed Sessionbus %s (%s) in %s\n' "$role" "$revision" "$prefix"
 case ":$PATH:" in *":$prefix/bin:"*) ;; *) printf 'Add this to your login shell profile: export PATH="$HOME/.local/bin:$PATH"\n';; esac
 if [ "$role" = host ]; then
  cat <<EOF
-The local host is ready. Product peers install separately from sessionbus-peers.
+The local host is ready. Product peers install separately; see https://github.com/sessionbus/sessionbus#install-binaries.
 Your persistent join secret is $config/host.key (not printed here).
 To join a hub:
   1. Securely copy host.key to the hub administrator (mode 0600).
