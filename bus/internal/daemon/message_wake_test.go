@@ -13,18 +13,6 @@ import (
 	"github.com/antst/sessionbus/bus/sdk/go/protocol"
 )
 
-func TestDeliveryWakeIsNotAnOptionalPolicy(t *testing.T) {
-	for _, requested := range []string{"", "stage", "run"} {
-		for _, previous := range []*protocol.LanePolicy{nil, {Persistent: true, IdleMessage: "stage"}, {Persistent: true, IdleMessage: "run"}} {
-			policy, err := normalizePolicy(&protocol.LaneSpawnRequest{IdleMessage: requested}, previous, "owner@local")
-			must(t, err)
-			if policy.IdleMessage != "run" {
-				t.Fatalf("requested=%q previous=%+v selected passive delivery: %+v", requested, previous, policy)
-			}
-		}
-	}
-}
-
 func TestDeliveryCrossingTurnEndWakesOnce(t *testing.T) {
 	for _, readyFirst := range []bool{false, true} {
 		t.Run(map[bool]string{false: "refusal-before-ready", true: "ready-before-refusal"}[readyFirst], func(t *testing.T) {
@@ -227,43 +215,45 @@ func TestOrdinarySendWakesFreshAndResumedLane(t *testing.T) {
 	_, socket := startDaemon(t)
 	owner := connectPeer(t, socket, "owner", "owner", "team")
 	zero, no := int64(0), false
-	for _, compatibility := range []string{"", "stage"} {
-		var lane protocol.LaneSpawnResult
-		must(t, owner.call("lane.spawn", protocol.LaneSpawnRequest{Name: "child" + compatibility, Product: "wake-worker", Open: &protocol.OpenOptions{}, IdleMessage: compatibility, AutoCloseMS: &zero, Notify: &no}, &lane))
-		for generation := 0; generation < 2; generation++ {
-			if lane.Policy == nil || lane.Policy.IdleMessage != "run" {
-				t.Fatalf("passive effective policy: %+v", lane.Policy)
-			}
-			var sent protocol.MessageSendResult
-			must(t, owner.call("message.send", protocol.MessageSendRequest{Target: lane.SessionID, Message: "answer without a second prompt"}, &sent))
-			if len(sent.Deliveries) != 1 || sent.Deliveries[0].Disposition != "written" {
-				t.Fatalf("native admission: %+v", sent)
-			}
-			var result protocol.RunStatus
-			must(t, owner.call("turn.wait", protocol.WaitRequest{SessionID: lane.SessionID}, &result))
-			if result.State != "done" || result.Result == nil || result.Result.Outcome != "completed" || result.Result.Result != "answer without a second prompt" {
-				t.Fatalf("delivery failed to cause work: %+v", result)
-			}
-			must(t, owner.call("turn.ack", protocol.RunRef{SessionID: lane.SessionID, RunID: result.RunID}, &struct{}{}))
-			must(t, owner.call("session.close", protocol.SessionCloseRequest{SessionID: lane.SessionID, Forget: generation == 1}, &struct{}{}))
-			if generation == 0 {
-				must(t, owner.call("lane.spawn", protocol.LaneSpawnRequest{ResumeSessionID: lane.SessionID, AutoCloseMS: &zero, Notify: &no}, &lane))
-			}
+	var lane protocol.LaneSpawnResult
+	must(t, owner.call("lane.spawn", protocol.LaneSpawnRequest{Name: "child", Product: "wake-worker", Open: &protocol.OpenOptions{}, AutoCloseMS: &zero, Notify: &no}, &lane))
+	for generation := 0; generation < 2; generation++ {
+		var sent protocol.MessageSendResult
+		must(t, owner.call("message.send", protocol.MessageSendRequest{Target: lane.SessionID, Message: "answer without a second prompt"}, &sent))
+		if len(sent.Deliveries) != 1 || sent.Deliveries[0].Disposition != "written" {
+			t.Fatalf("native admission: %+v", sent)
+		}
+		var result protocol.RunStatus
+		must(t, owner.call("turn.wait", protocol.WaitRequest{SessionID: lane.SessionID}, &result))
+		if result.State != "done" || result.Result == nil || result.Result.Outcome != "completed" || result.Result.Result != "answer without a second prompt" {
+			t.Fatalf("delivery failed to cause work: %+v", result)
+		}
+		must(t, owner.call("turn.ack", protocol.RunRef{SessionID: lane.SessionID, RunID: result.RunID}, &struct{}{}))
+		must(t, owner.call("session.close", protocol.SessionCloseRequest{SessionID: lane.SessionID, Forget: generation == 1}, &struct{}{}))
+		if generation == 0 {
+			must(t, owner.call("lane.spawn", protocol.LaneSpawnRequest{ResumeSessionID: lane.SessionID, AutoCloseMS: &zero, Notify: &no}, &lane))
 		}
 	}
 }
 
-func TestStoredPassivePolicyBecomesWakeWithoutChangingLifetime(t *testing.T) {
+func TestStoredIdleMessagePolicyIsRejected(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions")
 	store, _, err := openTable(path)
 	must(t, err)
-	before := protocol.LanePolicy{Persistent: true, AutoCloseMS: 321, IdleMessage: "stage", Notify: true, NotifyTarget: "owner@local"}
-	must(t, store.write(row{SessionID: "saved@local", Product: "wake-worker", Name: "saved@local", Groups: []string{"team", "session:saved@local"}, CreatedAt: time.Now(), Policy: &before}))
-	_, rows, err := openTable(path)
+	value := row{SessionID: "saved@local", Product: "wake-worker", Name: "saved@local", Groups: []string{"team", "session:saved@local"}, CreatedAt: time.Now(), Policy: &protocol.LanePolicy{Persistent: true}}
+	must(t, store.write(value))
+	_, _, err = openTable(path)
 	must(t, err)
-	want := before
-	want.IdleMessage = "run"
-	if len(rows) != 1 || rows[0].Policy == nil || *rows[0].Policy != want {
-		t.Fatalf("stored policy not upgraded: %+v", rows)
+	file := filepath.Join(path, rowFile(value.SessionID))
+	raw, err := os.ReadFile(file)
+	must(t, err)
+	var fields map[string]any
+	must(t, json.Unmarshal(raw, &fields))
+	fields["policy"].(map[string]any)["idle_message"] = "run"
+	raw, err = json.Marshal(fields)
+	must(t, err)
+	must(t, os.WriteFile(file, raw, 0o600))
+	if _, _, err := openTable(path); err == nil {
+		t.Fatal("stored idle_message policy was accepted")
 	}
 }

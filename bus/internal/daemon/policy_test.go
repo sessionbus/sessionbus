@@ -36,7 +36,7 @@ func policySession(t *testing.T, persistent bool, delay int64) (*session, *bufio
 	d.config.now = func() time.Time { return clock.now }
 	d.config.policyTimer = clock.timer
 	parent := &ownership{id: "owner@local", token: "owner-life"}
-	policy := &protocol.LanePolicy{Persistent: persistent, AutoCloseMS: delay, IdleMessage: "stage", OwnerSessionID: parent.id}
+	policy := &protocol.LanePolicy{Persistent: persistent, AutoCloseMS: delay, OwnerSessionID: parent.id}
 	item := &entry{row: row{SessionID: "lane@local", Name: "owner/lane@local", Groups: []string{"team"}, Policy: policy, CreatedAt: clock.now}, parent: parent, attachment: s, done: make(chan struct{})}
 	d.directory.entries[item.row.SessionID] = item
 	s.identity = item
@@ -143,7 +143,6 @@ func TestPolicyRefusalRestoresOriginalDeadlineAndSequence(t *testing.T) {
 }
 func TestPolicySeedUncertaintyDoesNotUndoAdmission(t *testing.T) {
 	s, r, _ := policySession(t, true, 0)
-	s.identity.row.Policy.IdleMessage = "run"
 	reply := make(chan answer, 1)
 	original := protocol.DeliveryRequest{MessageID: "m", From: protocol.DeliverySource{SessionID: "peer@local", Product: "peer", Groups: []string{}}, Body: "body"}
 	s.issue(routedRequest{destination: s.identity, method: "message.deliver", params: original, reply: reply})
@@ -184,11 +183,11 @@ func TestPolicyResumeDefaultsAndNotification(t *testing.T) {
 		}
 	}
 	yes, no, zero := true, false, int64(0)
-	initial, err := normalizePolicy(&protocol.LaneSpawnRequest{AutoCloseMS: &zero, IdleMessage: "run"}, nil, "first@local")
+	initial, err := normalizePolicy(&protocol.LaneSpawnRequest{AutoCloseMS: &zero}, nil, "first@local")
 	must(t, err)
 	resumed, err := normalizePolicy(&protocol.LaneSpawnRequest{}, initial, "second@local")
 	must(t, err)
-	if resumed.Persistent || resumed.AutoCloseMS != 60000 || resumed.IdleMessage != "run" || resumed.OwnerSessionID != "second@local" || !resumed.Notify {
+	if resumed.Persistent || resumed.AutoCloseMS != 60000 || resumed.OwnerSessionID != "second@local" || !resumed.Notify {
 		t.Fatalf("resume %#v", resumed)
 	}
 	promoted, err := normalizePolicy(&protocol.LaneSpawnRequest{Persistent: &yes}, initial, "second@local")
@@ -319,8 +318,8 @@ func TestPolicyRealWorkerWakePointerAndGroupCollection(t *testing.T) {
 	if code := rpcCode(owner.call("lane.spawn", unsupported, &lane)); code != protocol.UnsupportedOpen {
 		t.Fatalf("unsupported wake code %d", code)
 	}
-	must(t, owner.call("lane.spawn", protocol.LaneSpawnRequest{Name: "child", Product: "wake-worker", Open: &protocol.OpenOptions{}, ExtraGroups: []string{"team"}, IdleMessage: "run", AutoCloseMS: &zero}, &lane))
-	if lane.Policy == nil || lane.Policy.Persistent || lane.Policy.IdleMessage != "run" || lane.Policy.AutoCloseMS != 0 {
+	must(t, owner.call("lane.spawn", protocol.LaneSpawnRequest{Name: "child", Product: "wake-worker", Open: &protocol.OpenOptions{}, ExtraGroups: []string{"team"}, AutoCloseMS: &zero}, &lane))
+	if lane.Policy == nil || lane.Policy.Persistent || lane.Policy.AutoCloseMS != 0 {
 		t.Fatalf("policy %#v", lane.Policy)
 	}
 	var sent protocol.MessageSendResult
@@ -352,7 +351,7 @@ func TestPolicyRealWorkerWakePointerAndGroupCollection(t *testing.T) {
 	}
 	must(t, collector.call("session.close", protocol.SessionCloseRequest{SessionID: lane.SessionID}, &struct{}{}))
 	must(t, collector.call("lane.spawn", protocol.LaneSpawnRequest{ResumeSessionID: lane.SessionID, AutoCloseMS: &zero}, &lane))
-	if lane.Policy.OwnerSessionID != "collector@local" || lane.Policy.IdleMessage != "run" {
+	if lane.Policy.OwnerSessionID != "collector@local" {
 		t.Fatalf("resume %#v", lane.Policy)
 	}
 	if code := rpcCode(collector.call("turn.status", protocol.ReadRequest{SessionID: lane.SessionID, RunID: status.RunID}, &again)); code != protocol.UnknownSession {

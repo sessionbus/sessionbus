@@ -442,7 +442,7 @@ func TestLegacyDurableRowListsCompatibilityPolicy(t *testing.T) {
 		t.Fatalf("legacy sessions = %#v", listed.Sessions)
 	}
 	policy := listed.Sessions[0].Policy
-	if policy == nil || !policy.Persistent || policy.AutoCloseMS != 0 || policy.IdleMessage != "run" || policy.Notify || policy.OwnerSessionID != "" || policy.NotifyTarget != "" {
+	if policy == nil || !policy.Persistent || policy.AutoCloseMS != 0 || policy.Notify || policy.OwnerSessionID != "" || policy.NotifyTarget != "" {
 		t.Fatalf("legacy policy = %#v", policy)
 	}
 }

@@ -40,7 +40,6 @@ export interface OpenOptions {
 export interface LanePolicy {
   persistent: boolean;
   auto_close_ms: number /* int64 */;
-  idle_message: string;
   notify: boolean;
   notify_target?: string;
   owner_session_id?: string;
@@ -177,7 +176,6 @@ export type LaneDescribeResult = HelloDescription;
 export interface LaneSpawnRequest {
   persistent?: boolean;
   auto_close_ms?: number /* int64 */;
-  idle_message?: string;
   notify?: boolean;
   notify_target?: string;
   name?: string;

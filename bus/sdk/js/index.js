@@ -91,7 +91,7 @@ class Worker {
     }
   }
   async _open(request) {
-    if (request.params.policy?.idle_message === "run" && !this.supportsWake) { await this._replyError(request, -32008); return; }
+    if (request.params.policy && !this.supportsWake) { await this._replyError(request, -32008); return; }
     let result; try { result = await this.callbacks.open(this.controller.signal, request.params); } catch (error) { await this._replyError(request, -32009, { stderr_tail: [clean(error)] }); return; }
     this.opened = true;
     const at = request.params.name.lastIndexOf("@");

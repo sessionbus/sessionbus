@@ -19,7 +19,7 @@ func TestDurablePolicyStillRejectsResponseTrace(t *testing.T) {
 	path := t.TempDir()
 	store, _, err := openTable(path)
 	must(t, err)
-	value := row{SessionID: "child@local", Product: "fixture", Name: "child@local", Groups: []string{"one", "two"}, CreatedAt: time.Now(), Policy: &protocol.LanePolicy{IdleMessage: "stage"}}
+	value := row{SessionID: "child@local", Product: "fixture", Name: "child@local", Groups: []string{"one", "two"}, CreatedAt: time.Now(), Policy: &protocol.LanePolicy{}}
 	must(t, store.write(value))
 	file := filepath.Join(path, rowFile(value.SessionID))
 	raw, err := os.ReadFile(file)

@@ -139,7 +139,6 @@
         "policy": {
           "persistent": false,
           "auto_close_ms": 60000,
-          "idle_message": "stage",
           "notify": true,
           "owner_session_id": "parent@local"
         }
@@ -159,7 +158,6 @@
         "policy": {
           "persistent": false,
           "auto_close_ms": 60000,
-          "idle_message": "stage",
           "notify": true,
           "owner_session_id": "parent@local",
           "trace": "off"
@@ -180,7 +178,6 @@
         "policy": {
           "persistent": false,
           "auto_close_ms": 60000,
-          "idle_message": "stage",
           "notify": true,
           "owner_session_id": "parent@local",
           "trace": "events"
@@ -201,7 +198,6 @@
         "policy": {
           "persistent": false,
           "auto_close_ms": 60000,
-          "idle_message": "stage",
           "notify": true,
           "owner_session_id": "parent@local",
           "trace": "content"

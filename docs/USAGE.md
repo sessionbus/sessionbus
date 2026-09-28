@@ -148,7 +148,7 @@ interruption is subject to the product's documented acceptance scope.
 | --- | --- |
 | `persistent` | Whether the lane survives its lifetime owner's exit; default `false`. It does not make results durable. |
 | `auto_close_ms` | Retirement grace after a native completed/failed/interrupted terminal; default `60000`, `0` disables it. It is not an Open timeout; collecting does not reset it. |
-| Message delivery | Always wakes an idle agent. Legacy `idle_message` inputs are accepted for compatibility and normalize to `run`; there is no passive mode. |
+| Message delivery | Always wakes an idle agent; there is no passive mode. |
 | `notify` / `notify_target` | Completion pointers arrive as ordinary messages. They wake idle recipients and refer to results without containing or consuming them. A pointer-seeded run retains its result but emits no further automatic completion pointer. |
 | `trace` | Live parent-selected `off`, `events` or `content` copies of child bus traffic; default `off`. No trace history is added. |
 
@@ -172,7 +172,7 @@ Native resume requires an offline retained lane, a live authorized resumer and
 saved native history. It restores the native session, not the old Worker's
 results. An attached lane cannot be resumed. On resume, omitted `auto_close_ms`
 resets to the default; pass `0` again to keep it disabled. Persistence can be
-promoted, not demoted; saved passive policies upgrade to wake. See the protocol for
+promoted, not demoted. See the protocol for
 notification inheritance and complete resume rules.
 
 ## Communication is not confined to the ownership tree

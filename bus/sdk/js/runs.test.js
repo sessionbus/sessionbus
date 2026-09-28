@@ -85,7 +85,7 @@ test("pending Open rejects seed before native admission", async (t) => {
 test("wake capability rejects before product Open", async (t) => {
   for (const supported of [false, true]) {
     const { bus, opens } = await cursor(t, { pendingOpen: true, supportsWake: supported });
-    const opening = bus.call("session.open", { ...open, policy: { persistent: false, auto_close_ms: 0, idle_message: "run", notify: false, owner_session_id: "peer@local" } });
+    const opening = bus.call("session.open", { ...open, policy: { persistent: false, auto_close_ms: 0, notify: false, owner_session_id: "peer@local" } });
     if (supported) { await opening; assert.equal(opens(), 1); } else { await assert.rejects(opening, code(-32008)); assert.equal(opens(), 0); }
   }
 });

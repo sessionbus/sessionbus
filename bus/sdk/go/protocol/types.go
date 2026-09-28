@@ -85,7 +85,6 @@ type OpenOptions struct {
 type LanePolicy struct {
 	Persistent     bool   `json:"persistent"`
 	AutoCloseMS    int64  `json:"auto_close_ms"`
-	IdleMessage    string `json:"idle_message"`
 	Notify         bool   `json:"notify"`
 	NotifyTarget   string `json:"notify_target,omitempty"`
 	OwnerSessionID string `json:"owner_session_id,omitempty"`
@@ -234,7 +233,6 @@ type LaneDescribeResult = HelloDescription
 type LaneSpawnRequest struct {
 	Persistent      *bool        `json:"persistent,omitempty"`
 	AutoCloseMS     *int64       `json:"auto_close_ms,omitempty"`
-	IdleMessage     string       `json:"idle_message,omitempty"`
 	Notify          *bool        `json:"notify,omitempty"`
 	NotifyTarget    string       `json:"notify_target,omitempty"`
 	Name            string       `json:"name,omitempty"`

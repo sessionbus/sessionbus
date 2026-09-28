@@ -101,7 +101,7 @@ type tableForRoster struct{ path string }
 func (s *tableForRoster) write(t *testing.T) {
 	t.Helper()
 	store := &table{path: s.path}
-	must(t, store.write(row{SessionID: "retained@local", Name: "Retained@local", Product: "fixture", Groups: []string{"third", "session:retained@local"}, CreatedAt: time.Now(), Open: protocol.OpenOptions{Arguments: []string{"hidden-system-prompt"}}, Policy: &protocol.LanePolicy{Persistent: true, IdleMessage: "stage", AutoCloseMS: 60000, Notify: true, NotifyTarget: "secret-notify@local"}}))
+	must(t, store.write(row{SessionID: "retained@local", Name: "Retained@local", Product: "fixture", Groups: []string{"third", "session:retained@local"}, CreatedAt: time.Now(), Open: protocol.OpenOptions{Arguments: []string{"hidden-system-prompt"}}, Policy: &protocol.LanePolicy{Persistent: true, AutoCloseMS: 60000, Notify: true, NotifyTarget: "secret-notify@local"}}))
 }
 
 func TestOperatorRosterRejectsExistingFileAndHandlesStaleSocket(t *testing.T) {

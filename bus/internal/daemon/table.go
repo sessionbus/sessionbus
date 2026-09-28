@@ -56,7 +56,7 @@ func openTable(path string) (*table, []row, error) {
 		if len(fields) == 6 {
 			// Rows written before lane policy existed behaved as durable lanes:
 			// they survived owner exit and had no terminal auto-close or notification.
-			value.Policy = &protocol.LanePolicy{Persistent: true, IdleMessage: "run"}
+			value.Policy = &protocol.LanePolicy{Persistent: true}
 		}
 		if value.Policy != nil {
 			// LanePolicy also describes spawn responses, but trace is live-only.
@@ -74,9 +74,6 @@ func openTable(path string) (*table, []row, error) {
 			if _, err := protocol.EncodeResult("lane.spawn", protocol.LaneSpawnResult{SessionID: value.SessionID, Policy: value.Policy}); err != nil {
 				return nil, nil, errors.New("invalid durable lane policy")
 			}
-			// Validate the stored value before upgrading legacy passive delivery.
-			// Lifetime, notifications and retirement remain independent.
-			value.Policy.IdleMessage = "run"
 		}
 		ids[value.SessionID], names[value.Name] = true, true
 		rows = append(rows, cloneRow(value))
