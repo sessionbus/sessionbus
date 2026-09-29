@@ -250,7 +250,6 @@
         "open": {"$ref": "#/$defs/SessionOpenOptions"},
         "persistent": {"type":"boolean"},
         "auto_close_ms": {"type":"integer","minimum":0,"maximum":9223372036854},
-        "idle_message": {"enum":["stage","run"]},
         "notify": {"type":"boolean"},
         "notify_target": {"type":"string","minLength":1},
         "trace": {"enum":["off","events","content"]}
@@ -402,7 +401,7 @@
         "stderr_tail": {"type": "array", "items": {"type": "string"}}
       }
     },
-    "LanePolicy": {"type":"object","additionalProperties":false,"required":["persistent","auto_close_ms","idle_message","notify"],"properties":{"persistent":{"type":"boolean"},"auto_close_ms":{"type":"integer","minimum":0,"maximum":9223372036854},"idle_message":{"enum":["stage","run"]},"notify":{"type":"boolean"},"notify_target":{"type":"string","minLength":1},"owner_session_id":{"type":"string","minLength":1},"trace":{"enum":["off","events","content"]}}},
+    "LanePolicy": {"type":"object","additionalProperties":false,"required":["persistent","auto_close_ms","notify"],"properties":{"persistent":{"type":"boolean"},"auto_close_ms":{"type":"integer","minimum":0,"maximum":9223372036854},"notify":{"type":"boolean"},"notify_target":{"type":"string","minLength":1},"owner_session_id":{"type":"string","minLength":1},"trace":{"enum":["off","events","content"]}}},
     "RunRef": {"type":"object","additionalProperties":false,"required":["session_id","run_id"],"properties":{"session_id":{"type":"string","minLength":1},"run_id":{"type":"string","minLength":1}}},
     "ReadRequest": {"type":"object","additionalProperties":false,"required":["session_id"],"properties":{"session_id":{"type":"string","minLength":1},"run_id":{"type":"string","minLength":1}}},
     "WaitRequest": {"type":"object","additionalProperties":false,"required":["session_id"],"properties":{"session_id":{"type":"string","minLength":1},"run_id":{"type":"string","minLength":1},"timeout_ms":{"type":"integer","minimum":0,"maximum":9223372036854}}},

@@ -16,7 +16,7 @@ func (s *session) startLane(start *launch, helloFrame protocol.Frame, hello prot
 	s.launch, s.identity, s.owned = start, start.entry, 1
 	unsupportedField := unsupported(start.entry.row.Open, hello.SupportedOpenFields)
 	if !start.describe && !hello.SupportsMessageRun {
-		unsupportedField = "idle_message"
+		unsupportedField = "supports_message_run"
 	}
 	if start.describe || unsupportedField != "" {
 		body, _ := protocol.ResultBytes(helloFrame.ID, helloFrame.Method, struct{}{})

@@ -337,19 +337,17 @@ exists`. The lane owner commits while handling the open response, before it
 handles the next inbox frame. An exit drains the closed socket first, so an
 already-written valid open response can commit; EOF first fails the spawn.
 
-The normalized `policy` contains `persistent`, `auto_close_ms`, `idle_message`,
+The normalized `policy` contains `persistent`, `auto_close_ms`,
 `notify`, and, when applicable, `owner_session_id` or `notify_target`.
-Fresh defaults are `persistent:false`, `auto_close_ms:60000`, and
-`idle_message:"run"`. Idle wake is mandatory, not a policy choice. The
-legacy input `idle_message:"stage"` remains readable for compatibility but
-normalizes to `run`, including stored rows and resume. Zero disables auto-close; positive values are milliseconds
+Fresh defaults are `persistent:false` and `auto_close_ms:60000`.
+Idle wake is mandatory, not a policy choice. Zero disables auto-close; positive values are milliseconds
 up to 9223372036854. Persistence controls owner-exit cleanup independently of
 terminal auto-close. All four persistence/auto-close
 combinations are supported. Open performs no input and arms no deadline.
 
 On resume, persistence survives and may be promoted, never demoted. A
 nonpersistent lane acquires the resuming owner. Omitted auto-close resets to
-60000; custom or disabled grace must be supplied again. Idle-message behavior is always wake. The effective policy reports `run`. Parent-owned lanes notify their current owner by default;
+60000; custom or disabled grace must be supplied again. Parent-owned lanes notify their current owner by default;
 `notify:false` disables that delivery. An explicit `notify_target` may name that
 same owner; a different target is rejected.
 Fresh persistent lanes have no implicit target: `notify_target` enables it,
@@ -767,7 +765,7 @@ Only lanes have durable rows. A row has exactly these columns:
 | `groups` | Full resume-membership recipe containing the parent's private group, the recursively composed `<parent private group>/<leaf>`, and explicit `extra_groups`; no other parent membership is inherited. |
 | `open` | The original validated `SessionOpenOptions` value, re-marshalled unchanged on resume with `arguments` order preserved. |
 | `created_at` | Daemon timestamp assigned when the row commits. |
-| `policy` | Normalized independent lifetime, auto-close, idle-message and notification selection. Older rows without it load as persistent, non-notifying lanes with no auto-close, preserving their original lifetime behavior; their delivery behavior upgrades to mandatory wake. |
+| `policy` | Normalized independent lifetime, auto-close and notification selection. Older rows without it load as persistent, non-notifying lanes with no auto-close, preserving their original lifetime behavior; their delivery behavior upgrades to mandatory wake. |
 
 Each row is one JSON file named `<sha256(session_id)>.json`. A commit writes and
 syncs a temporary file, renames it to that name, and syncs the containing

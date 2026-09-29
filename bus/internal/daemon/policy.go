@@ -26,7 +26,7 @@ type ownership struct {
 type ownerEndEvent struct{ owner *ownership }
 
 func normalizePolicy(input *protocol.LaneSpawnRequest, previous *protocol.LanePolicy, ownerID string) (*protocol.LanePolicy, error) {
-	value := protocol.LanePolicy{AutoCloseMS: defaultAutoCloseMS, IdleMessage: "run", Notify: true, OwnerSessionID: ownerID}
+	value := protocol.LanePolicy{AutoCloseMS: defaultAutoCloseMS, Notify: true, OwnerSessionID: ownerID}
 	if previous != nil {
 		value = *previous
 		value.AutoCloseMS = defaultAutoCloseMS
@@ -41,9 +41,6 @@ func normalizePolicy(input *protocol.LaneSpawnRequest, previous *protocol.LanePo
 	if input.AutoCloseMS != nil {
 		value.AutoCloseMS = *input.AutoCloseMS
 	}
-	// Legacy callers and stored rows may still say "stage". Delivery itself
-	// requests work; passive staging is no longer a selectable lane behavior.
-	value.IdleMessage = "run"
 	if value.Persistent {
 		value.OwnerSessionID = ""
 		if previous == nil {

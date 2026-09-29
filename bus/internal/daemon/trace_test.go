@@ -228,7 +228,7 @@ func TestParentTraceCopyDoesNotTraceItsParentAgain(t *testing.T) {
 	parentItem.peer = false
 	parentItem.row.CreatedAt = time.Now()
 	parentItem.parent = d.directory.entries[parentID].parent
-	parentItem.row.Policy = &protocol.LanePolicy{IdleMessage: "stage"}
+	parentItem.row.Policy = &protocol.LanePolicy{}
 	parentItem.row.Groups = []string{"session:parent@local", "session:parent@local/inspect-parent", "team"}
 	parentItem.traceMode, parentItem.traceVersion = "content", randomID("policy")
 	d.directory.mu.Unlock()
@@ -401,7 +401,7 @@ func TestParentTraceHeldParentDoesNotHoldOriginalAndShutdownJoins(t *testing.T) 
 func TestParentTraceIdleRunKeepsNormalCompletionPointer(t *testing.T) {
 	d, grandparent := traceFixture(t)
 	var parent protocol.LaneSpawnResult
-	must(t, grandparent.call("lane.spawn", protocol.LaneSpawnRequest{Name: "run-parent", Product: "wake-worker", Open: &protocol.OpenOptions{}, IdleMessage: "run", Trace: "content", ExtraGroups: []string{"team"}}, &parent))
+	must(t, grandparent.call("lane.spawn", protocol.LaneSpawnRequest{Name: "run-parent", Product: "wake-worker", Open: &protocol.OpenOptions{}, Trace: "content", ExtraGroups: []string{"team"}}, &parent))
 	child := traceSpawn(t, grandparent, "child", "content", false)
 	d.directory.mu.Lock()
 	d.directory.entries[child].parent = d.directory.entries[parent.SessionID].lifetime
@@ -434,7 +434,6 @@ func TestParentTraceIdleRunKeepsNormalCompletionPointer(t *testing.T) {
 
 func TestParentTraceRefusedWakeDoesNotMarkNextExplicitRun(t *testing.T) {
 	s, reader, _ := policySession(t, true, 0)
-	s.identity.row.Policy.IdleMessage = "run"
 	reply := make(chan answer, 1)
 	s.issue(routedRequest{destination: s.identity, method: "message.deliver", traceCopy: true,
 		params: protocol.DeliveryRequest{MessageID: "copy", From: protocol.DeliverySource{SessionID: "daemon@local", Product: "sessionbus", Groups: []string{}}, Body: "trace"}, reply: reply})
@@ -593,7 +592,7 @@ func TestParentTraceRemoteEndedParentCannotReceiveLateCopy(t *testing.T) {
 	beta.directory.mu.Lock()
 	item := beta.directory.entries["held@beta"]
 	item.peer, item.row.CreatedAt = false, time.Now()
-	item.row.Policy = &protocol.LanePolicy{IdleMessage: "stage", Persistent: true}
+	item.row.Policy = &protocol.LanePolicy{Persistent: true}
 	item.parent = beta.directory.entries[child].parent
 	item.traceMode, item.traceVersion = "content", randomID("policy")
 	oldParent := item.parent

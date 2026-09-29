@@ -227,7 +227,7 @@ func TestCommunicationLogRunMetadataAndSupersession(t *testing.T) {
 	parent := connectPeer(t, d.config.SocketPath, "parent", "parent", "team")
 	var lane protocol.LaneSpawnResult
 	notify := false
-	must(t, parent.call("lane.spawn", protocol.LaneSpawnRequest{Product: "wake-worker", Name: "child", Open: &protocol.OpenOptions{}, IdleMessage: "run", Notify: &notify}, &lane))
+	must(t, parent.call("lane.spawn", protocol.LaneSpawnRequest{Product: "wake-worker", Name: "child", Open: &protocol.OpenOptions{}, Notify: &notify}, &lane))
 	var sent protocol.MessageSendResult
 	must(t, parent.call("message.send", protocol.MessageSendRequest{Target: lane.SessionID, Message: "wake child"}, &sent))
 	var ref protocol.RunRef

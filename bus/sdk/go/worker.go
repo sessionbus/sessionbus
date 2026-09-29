@@ -272,7 +272,7 @@ func (w *Worker) handle(ctx context.Context, request *rpc.Request) {
 }
 
 func (w *Worker) open(ctx context.Context, request *rpc.Request) {
-	if policy := request.Params.(*OpenRequest).Policy; policy != nil && policy.IdleMessage == "run" && !w.supportsWake {
+	if request.Params.(*OpenRequest).Policy != nil && !w.supportsWake {
 		w.reply(w.conn.Error(request, protocol.UnsupportedOpen, nil))
 		return
 	}
