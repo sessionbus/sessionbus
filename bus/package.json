@@ -1,10 +1,10 @@
 {
   "name": "@sessionbus/kit",
-  "version": "0.5.8",
+  "version": "0.5.9",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/antst/sessionbus.git",
+    "url": "git+https://github.com/sessionbus/sessionbus.git",
     "directory": "bus"
   },
   "main": "sdk/js/index.js",
