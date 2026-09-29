@@ -783,7 +783,7 @@ Callback failures map exactly once:
 
 | Callback | Wire result |
 | --- | --- |
-| `open` | `spawn_failed` with `stderr_tail:[message]`; the daemon passes it through unchanged. |
+| `open` | `spawn_failed` with `stderr_tail:[message]`; after the worker exits, the daemon puts its bounded trailing stderr before that tail and adds its exit code when the worker supplied none. |
 | `run` | Callback error or invalid/oversized output becomes retained `unavailable`. Only an observed native terminal supplies completed/failed/interrupted. |
 | `interrupt` | `{}`; the callback message is one quoted line on worker stderr, and the run terminal remains the stopping truth. |
 | `deliver` | An explicit `ProtocolError` with code `-32603` preserves an uncertain-submission RPC failure; the daemon maps it to `rejected/no_receipt`, which makes no non-consumption claim. Other callback errors become rejected receipts with the callback message as `reason` and must denote observed refusal or failure before submission. |
