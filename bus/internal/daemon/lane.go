@@ -3,6 +3,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"syscall"
 	"time"
 
@@ -11,6 +12,11 @@ import (
 )
 
 const closeBound = 10 * time.Second
+
+// workerSpawnFailed marks a spawn_failed that the worker itself returned from
+// open. Its stderr is complete only after exit, so finishLane adds it there;
+// failures built with failure() are never merged again.
+type workerSpawnFailed protocol.SpawnFailedData
 
 func (s *session) startLane(start *launch, helloFrame protocol.Frame, hello protocol.HelloDescription) {
 	s.launch, s.identity, s.owned = start, start.entry, 1
@@ -55,7 +61,12 @@ func (s *session) beginOpen() {
 func (s *session) finishOpen(frame protocol.Frame) {
 	s.openID = 0
 	if frame.Error != nil {
-		s.abortLaunch(errorAnswer(frame.Error))
+		result := errorAnswer(frame.Error)
+		var reported workerSpawnFailed
+		if result.code == protocol.SpawnFailed && json.Unmarshal(frame.Error.Data, &reported) == nil {
+			result.data = reported
+		}
+		s.abortLaunch(result)
 		s.orderlyStop()
 		return
 	}
@@ -219,6 +230,9 @@ func (s *session) finishLane() {
 		s.daemon.directory.releaseLaunch(s.launch)
 	}
 	if s.launchResult != nil {
+		if reported, ok := s.launchResult.data.(workerSpawnFailed); ok {
+			s.launchResult.data = withStderr(s.child, protocol.SpawnFailedData(reported))
+		}
 		s.launch.reply <- *s.launchResult
 	}
 	if s.committed {

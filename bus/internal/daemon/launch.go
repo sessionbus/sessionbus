@@ -102,13 +102,20 @@ func (d *Daemon) finishUnclaimed(start *launch, child *structuredprocess.Process
 }
 
 func failure(child *structuredprocess.Process, message string) protocol.SpawnFailedData {
-	data := protocol.SpawnFailedData{StderrTail: []string{message}}
+	return withStderr(child, protocol.SpawnFailedData{StderrTail: []string{message}})
+}
+
+// withStderr puts the worker's captured stderr before data's tail and uses the
+// observed exit code only when data has none.
+func withStderr(child *structuredprocess.Process, data protocol.SpawnFailedData) protocol.SpawnFailedData {
 	if child == nil {
 		return data
 	}
 	stderr, exit := child.Details()
-	data.StderrTail = append(stderr, message)
-	if exit >= 0 {
+	if len(stderr) != 0 {
+		data.StderrTail = append(stderr, data.StderrTail...)
+	}
+	if data.ExitCode == nil && exit >= 0 {
 		data.ExitCode = &exit
 	}
 	return data
