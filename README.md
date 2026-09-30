@@ -62,7 +62,8 @@ network; federation uses TLS, and the hub can read routed messages.
 
 [Start with two sessions](QUICKSTART.md) ·
 [Scenarios, concepts and FAQ](docs/USAGE.md) ·
-[Protocol reference](bus/docs/PROTOCOL.md)
+[Protocol reference](bus/docs/PROTOCOL.md) ·
+[Required messaging during active work](docs/requirements/ACTIVE-WORK-MESSAGING.md)
 
 ## See it working
 
