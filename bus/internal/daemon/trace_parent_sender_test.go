@@ -21,7 +21,12 @@ func TestParentTraceOwnSendIsNotCopied(t *testing.T) {
 			for _, targets := range [][]string{{child}, {childName}, {child, "missing"}, {child, "other@local"}} {
 				var result protocol.MessageSendResult
 				must(t, parent.call("message.send", protocol.MessageSendRequest{Targets: targets, Message: "from parent"}, &result))
-				if len(result.Deliveries) != len(targets) || result.Deliveries[0].SessionID != child || (result.Deliveries[0].Disposition != "written" && result.Deliveries[0].Disposition != "injected") {
+				// queued_for_next_turn is accepted too: the SDK keeps w.run set until
+				// turn.ready is acked, so Worker.deliver can still return NotRunning
+				// before submission for the prior seeded run; the daemon retires that
+				// as completion-crossing recovery. Suppression below is by identity,
+				// not receipt (see TestParentTraceOwnSendUsesIdentityNotReceipt).
+				if len(result.Deliveries) != len(targets) || result.Deliveries[0].SessionID != child || (result.Deliveries[0].Disposition != "written" && result.Deliveries[0].Disposition != "injected" && result.Deliveries[0].Disposition != "queued_for_next_turn") {
 					t.Fatal(result)
 				}
 				if len(targets) == 2 && targets[1] == "other@local" {
