@@ -73,12 +73,61 @@ source-proven automatic active-delivery path, with queued work started after
 product requirement. The protocol now distinguishes valid completion-race
 recovery from a still-busy adapter's failure to deliver into current work.
 
-The quoted wrapper-queue exception is already present in this repository's
-initial commit `707d9a4015d6cafbfd8835f04ad5e29d686c2e62`, dated 2026-09-08.
-That is the earliest occurrence verified in this repository history, not proof
-of when the owner requirement was first weakened or who made that decision.
-The exact earlier provenance and the first weakened matrix revision remain
-under investigation. No owner waiver is established by these artifacts.
+## Verified provenance timeline
+
+The subsequent investigation found no owner waiver in the sources searched.
+The requirement was documented before the wrapper-queue exception. The first
+verified protocol weakening and the first permissive acceptance wording have
+different dates:
+
+| Date (UTC) | Artifact | Finding |
+| --- | --- | --- |
+| 2026-08-10 | Predecessor repository `88ea88cc`, `README.md:46` | "Incoming messages wake idle threads or steer an already-running turn." |
+| 2026-08-15 | Predecessor `22dfe10`, `docs/ANTIGRAVITY-ADAPTER.md:244-247` | A parked adapter design queues messages arriving during a turn for the next turn unless a safe native injection contract exists. This is earlier adapter-level latitude, distinct from the later general protocol exception. |
+| 2026-08-16 | Predecessor `4275c8ef`, `docs/ACCEPTANCE-MATRIX.md:107,165` | Earliest permissive acceptance wording found: "busy message steers/queues" and "busy message follows product semantics". |
+| 2026-08-16 | Predecessor `1cc246a` and `7fec6a2`, `docs/GROK-LANES.md:88-90` and `:96-98` respectively | Grok lane designs permit a durable next-turn queue instead of active interjection when the latter cannot preserve their accounting requirement. |
+| 2026-09-02 | Predecessor `747e891`, `docs/specs/NATIVE-PEER-PROTOCOL.md:224-229` | The input must influence the current turn; merely queueing it for a later turn is explicitly nonconforming. |
+| 2026-09-04 | Predecessor `7367099a`, `docs/designs/UNIVERSAL-SESSION-PROTOCOL.md:166-168` | Earliest protocol exception found allowing wrappers without mid-run injection to queue for the next turn. |
+| 2026-09-08 | Core `707d9a4015d6cafbfd8835f04ad5e29d686c2e62`, `bus/docs/PROTOCOL.md:401-403` | The initial commit on core main inherited that exception; it did not originate it. |
+| 2026-09-21 | Core PR #89, commits `d765d80` and `0074469`; peers PR #59 | Core PR #89 and `0074469` added a daemon next-Run queue for the completion-race wake fix and described native mid-turn delivery as preferred rather than mandatory. The peers #59 boundary table selected the queue as the ordinary busy path for six lane adapters. |
+| 2026-09-28 22:05:32 | Product test matrix draft r0 | opus-dev wrote acceptance permitting consumption in the same turn or an automatic next run. |
+| 2026-09-28 22:41:40 | Product test matrix r3 | The I1.4s and M1.5 alternatives quoted above appeared in their final form. |
+| 2026-09-28 22:51:25 | Matrix r3.2 review, `message-lnavuoi7hooj` | dev1 cleared the criteria. Root subsequently used them to permit next-run design choices. The conflict was not caught. |
+| 2026-09-29 | Product acceptance and release reviews | The weaker criteria were used for release readiness. These reviews did not establish universal mid-task delivery. Some products already used native mid-turn carriers; this is not a finding that every released product was defective. |
+| 2026-09-30 | Core PR #98, merge `d671641e` | The original requirement was restored explicitly in the design and generated protocol; the owner's current statements were recorded verbatim. Documentation alone does not fix adapters. |
+
+**Accountability.** The transcript investigation attributes the September 4 A5
+proposal to fable-architect and its agreement to codex-peer, followed by
+fable-architect's September 5 V4 widening (FABLE L32390). It attributes the
+September 28 matrix wording to opus-dev, its independent clearance to dev1, and
+subsequent use of the weakened acceptance criteria and the September 21 fallback
+work to root. The failure crossed design, implementation, tests and review;
+no owner requirement change was found in the sources searched. The report also
+identifies dev1's `message-urbgrwpcm0ud` as attributing "busy-next-turn" to an
+"owner quality bar" although the cited owner statements were "forget about
+legacy!" and "we still not prod level" (CXDEV1 L142087, L142098). That attribution
+is not evidence of owner authorization. Git commits use a shared human author
+identity and must not be used alone to attribute an agent's decision.
+
+**Evidence and limits.** The investigation is preserved in
+`sessionbus-evidence/repository-split-plan-root-20260922/idle-message-removal/review/BUSY-REQUIREMENT-PROVENANCE.md`.
+Its source keys identify exact local transcript files and line numbers, matrix
+draft writes, commits and review messages. The August/September predecessor
+artifacts cited above were also independently read from their Git objects when
+updating this record. The September 4 proposal is identified there as FABLE
+L31434, agreement L31481; the matrix drafts as MAIN L21919 and L22408. The
+September 30 report was delivered as `message-hsfyhpjk8iwp`.
+
+The searched owner statements repeatedly require mid-turn delivery; none grants
+a waiver. Generic release approval and silence after an agent's explanation do
+not establish one. The investigation found no evidence establishing whether
+the owner was shown, or approved, the matrix I1.4/M1 busy criteria,
+`NATIVE-BOUNDARIES.md`, A5 or V4. The finding is "no owner waiver found", not
+"owner unaware". Owner messages before August 9 and other hosts were not
+searched, so these dates identify the earliest occurrences found, not the first
+possible statement of the requirement. Native capability and actual timing for
+each current adapter require a separate source audit and live evidence; the
+provenance investigation does not replace that work.
 
 ## Rules for implementation, review and release
 
