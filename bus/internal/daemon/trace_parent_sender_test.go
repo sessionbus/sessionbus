@@ -26,8 +26,7 @@ func TestParentTraceOwnSendIsNotCopied(t *testing.T) {
 				// before submission for the prior seeded run; the daemon retires that
 				// as completion-crossing recovery. Suppression below is by identity,
 				// not receipt (see TestParentTraceOwnSendUsesIdentityNotReceipt).
-				disposition := result.Deliveries[0].Disposition
-				if len(result.Deliveries) != len(targets) || result.Deliveries[0].SessionID != child || (disposition != "written" && disposition != "injected" && disposition != "queued_for_next_turn") {
+				if len(result.Deliveries) != len(targets) || result.Deliveries[0].SessionID != child || (result.Deliveries[0].Disposition != "written" && result.Deliveries[0].Disposition != "injected" && result.Deliveries[0].Disposition != "queued_for_next_turn") {
 					t.Fatal(result)
 				}
 				if len(targets) == 2 && targets[1] == "other@local" {
