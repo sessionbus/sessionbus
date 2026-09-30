@@ -4,6 +4,12 @@ Status: design in progress. Section 1 is the proposed wire contract; later
 sections will derive the daemon, native product kits, DSH integration, wrappers,
 and migration from it.
 
+> **2026-09-30 owner-directed requirement restoration:** active-work delivery
+> is mandatory for every agent product and mode. This restores the original
+> requirement after weaker adapter and acceptance language was found; it is
+> not a new policy. See the [verbatim owner record](../requirements/ACTIVE-WORK-MESSAGING.md).
+> This documentation correction does not certify current implementations.
+
 ## 1. Wire
 
 ### 1.1 Roles and connection model
@@ -244,6 +250,44 @@ a human prompt or a separate `run`. Active delivery joins native processing;
 an input crossing the active-to-idle boundary must still be processed
 automatically. Admission refusal, capacity failure, and uncertain transport
 must remain explicit; none may be disguised as successful passive storage.
+
+**Required active-work delivery.** This is the original product requirement,
+not an optional adapter policy: every agent product, in both interactive and
+lane modes, MUST make a message arriving during ongoing work available to that
+work at the next supported native input/steering boundary. The adapter MUST NOT
+hold it until the entire task, agent run, or lane Run reaches its final terminal
+or becomes idle. An hour-long task must be able to receive corrections and
+coordinate with peers while it is still working. A native processing boundary
+may occur between model responses or tool steps; this does not require interrupting
+an in-flight model response or tool call instantaneously.
+
+A receipt describes admission evidence, not an exemption from this scheduling
+requirement. In particular, `queued_for_next_turn` MUST NOT be interpreted as
+permission to defer every busy message until after the whole current task.
+Products with no suitable native mechanism have a conformance gap to resolve
+or report explicitly; documenting eventual delivery does not make them conforming.
+Idle wake and recovery of an input that actually crosses completion remain
+required, but do not replace delivery during active work. Queue ownership,
+interruption loss, capacity, identity and no-replay remain separate obligations.
+Forced abort/restart or replay of an uncertain submission is not a substitute
+for active-work delivery.
+
+**Acceptance (BUSY-MID).** On each product's interactive and lane surfaces,
+start a multi-step task, send a unique message while that task remains active,
+and observe the agent consume and react to it before the original task's final
+terminal. Record the native identity, message, active-work evidence, reaction,
+and terminal ordering. A transport receipt, retained queue item, reply in a
+later Run, or automatic turn after final idle is insufficient. Existing evidence
+may be reused only if it demonstrates this ordering; otherwise the property is
+unverified. Retain historical tests and fixes, but do not carry their PASS labels
+from a weaker acceptance criterion.
+
+The [owner's verbatim requirement and the recorded acceptance failure](../../docs/requirements/ACTIVE-WORK-MESSAGING.md) are part of this requirement's
+provenance. Adapter limitations, receipt terminology, test fixtures and release
+reviews must not silently weaken it. A proposed relaxation must identify the
+behavior lost and obtain an explicit owner decision; a generic merge/release
+approval is not such a decision.
+
 Its result is exactly one closed receipt: `written`, `injected`,
 `queued_for_next_turn`, or `rejected` with a nonempty reason.
 
@@ -452,16 +496,23 @@ once with the observed native receipt and may block on its transport write.
 Adapters must call it outside native reader locks. Missing or uncertain receipt
 uses Internal/no_receipt, not a guessed refusal. Invalid receipt encoding or
 write failure closes the connection so the original request cannot hang.
-Active delivery keeps the ordinary native admission path and Run token. It must
-be consumed by that turn or automatically continued; no human prompt is needed.
+Active delivery keeps the ordinary native admission path and Run token and
+follows the required active-work delivery contract above. An automatic later
+Run is not a substitute for consumption during ongoing work.
 At the final native handoff, the product synchronizes delivery with native turn
-completion. If the turn ended, or the product has no source-proven automatic
-active-delivery path, and nothing was written, steered or queued, it returns
-`ProtocolError(-32004, not_running)`. Safe native mid-turn admission remains the
-preferred path; this refusal must precede any native submission. The kit also returns this error
+completion. If the turn ended and nothing was written, steered or queued, it
+returns `ProtocolError(-32004, not_running)`. This refusal must precede any
+native submission. The kit also returns this error
 without invoking the product when the run is already absent or its context is
 cancelled. The product check is still required: completion may race the kit's
 check. Never return this error after native admission or an uncertain write.
+
+**Current implementation gap.** Existing adapters may also return `not_running`
+while native work is still active because they lack an active-delivery path.
+The daemon fallback described below preserves automatic eventual processing;
+it does not satisfy active-work delivery in that case. That adapter behavior
+requires correction. The valid completion-race fallback and its no-replay
+protections must be preserved when correcting it.
 
 For this pre-submission refusal on an ordinary lane delivery, if ready already
 arrived, the daemon immediately admits the message as new work and returns its
@@ -636,9 +687,10 @@ adapters own no archival timer.
 - Same-identity replacement atomically makes the new peer current, sends
   `session.superseded` to the old exact connection, and prevents reconnection by
   that displaced identity instance.
-- Delivery is mandatory. Products that cannot inject during a native run queue
-  for the next turn in their wrapper and report that disposition; the daemon
-  has no injection capability flag or queue.
+- Delivery is mandatory during active work as well as at idle. Products must
+  meet the active-work delivery and BUSY-MID requirements in `message.deliver`.
+  A wrapper or daemon queue that waits for the entire active Run to finish is
+  not a conforming substitute. Receipt vocabulary is not a capability waiver.
 - A worker binary absent from PATH fails as `unknown_product`. A binary that
   starts but exits before hello fails describe or spawn with bounded trailing
   stderr and its exit code when one exists. Neither fabricates readiness.
@@ -2045,7 +2097,7 @@ is present, the kit scrubs and rejects it instead of passing it onward.
 | Readiness and projection | The wrapper hellos immediately after Claude starts because it minted the session ID. Claude's `system/init` is verified when it arrives with the first turn, and its `session_id` must equal the minted one. An exit before the first turn is reported by the ordinary process-exit path. Interactive projection lands with the `claude-peer mcp` entry, not the lane wrapper. | No readiness timer. |
 | Run | Write one stream-json user frame, keep the run callback pending, and convert the exact result frame to the terminal result. | `lane.go:173-225` already proves the single stream write plus terminal observation. |
 | Tools | In lane mode `claude/.mcp.json` starts stateless `claude-peer mcp` calls against the wrapper's private Unix endpoint. In peer mode Claude keeps one stdio helper alive for the session; that helper owns the direct peer connection and its caller. After Claude `/clear`, the helper observes the new product session and performs a different-ID re-hello before serving its actions. | The two resident owners never coexist for one session; `/clear` ends the old transient peer identity instead of creating an `inactive` side state. |
-| Deliver | Idle delivery starts native work. Lane mode receives a full delivery seed through the shared Worker Run; interactive mode uses the product-owned native wake path. Active delivery must be consumed or automatically continued across completion. Report only the demonstrated admission boundary. | The message itself requests work. Product-native transport and admission details are recorded in the sessionbus-peers product ledger; passive FIFO storage until a later explicit prompt is not conforming. |
+| Deliver | Idle delivery starts native work. Lane mode receives a full delivery seed through the shared Worker Run; interactive mode uses the product-owned native wake path. Active delivery must meet Section 1's required active-work delivery contract; continuation after completion is only completion-race recovery, not a substitute for mid-task delivery. Report only the demonstrated admission boundary. | The message itself requests work. Product-native transport and admission details are recorded in the sessionbus-peers product ledger; passive FIFO storage until a later explicit prompt is not conforming. |
 | Interrupt and close | Interrupt writes the native `control_request` subtype `interrupt`; close ends the stream and reaps the exact child. | `lane.go:277-321` proves both operations and their native acknowledgements. |
 | Exception ledger | Section 1 code exceptions: **0**. Declared unsupported open fields: **none**. Passive lane-delivery FIFOs are not permitted. | Every open value has a native process flag or stream mapping; native handoff remains inside the product and the daemon contains no product branch. |
 | Size cap | **360 production / 400 test logical lines**, including stream framing and Claude argument translation but excluding the shared wrapper host. | The current 578-line actor combines generic lifecycle with product translation; the generic kit removes that duplication. |
@@ -2059,7 +2111,7 @@ is present, the kit scrubs and rejects it instead of passing it onward.
 | Open and resume | Fresh performs `thread/start`, returns the product thread ID, applies the composed name through `thread/name/set`, and materializes its rollout; resume uses `resume_session_id` and reapplies the stored open object. It supports all five open fields. Permission mapping is exact: default means approval `never` with the configured sandbox, while bypass means approval `never` plus `danger-full-access`. | `CodexStartRequest` and `CodexLaneTurnRequest` at `codex_native.go:51-70` expose cwd, model, reasoning effort, permissions, and arguments. The wrapper preserves the product-owned thread ID and name instead of inventing daemon aliases. |
 | Run | Send one `turn/start`, await the matching `turn/completed`, and extract the final agent message. | `internal/products/codex/lane.go:75-122` and `codex_native.go:528-656` prove the end-to-end primitive. |
 | Tools | In lane mode the wrapper supplies a private `codex-peer mcp` Unix endpoint in App Server `thread/start` `mcp_servers`; calls are stateless action hops. In peer mode the App Server daemon starts one helper per thread with no launcher environment; that helper owns the thread's peer connection and caller and defers hello until the first thread identity exists. After Codex `/clear`, the new thread gets its own helper and peer identity. | MCP configuration and peer ownership are per thread; the App Server's observed helper lifetime removes the old transient identity without `inactive` or a launcher-owned endpoint. |
-| Deliver | Idle delivery starts native work. Lane mode receives a full delivery seed through the shared Worker Run; interactive mode uses the product-owned native wake path. Active delivery must be consumed or automatically continued across completion. Report only the demonstrated admission boundary. | The message itself requests work. Product-native transport and admission details are recorded in the sessionbus-peers product ledger; passive FIFO storage until a later explicit prompt is not conforming. |
+| Deliver | Idle delivery starts native work. Lane mode receives a full delivery seed through the shared Worker Run; interactive mode uses the product-owned native wake path. Active delivery must meet Section 1's required active-work delivery contract; continuation after completion is only completion-race recovery, not a substitute for mid-task delivery. Report only the demonstrated admission boundary. | The message itself requests work. Product-native transport and admission details are recorded in the sessionbus-peers product ledger; passive FIFO storage until a later explicit prompt is not conforming. |
 | Interrupt and close | Interrupt calls `turn/interrupt` for the exact active turn. Close archives the thread and unsubscribes before the wrapper exits. | `internal/products/codex/lane.go:124-158` and `codex_native.go:758-780` are the existing native boundaries. |
 | Exception ledger | Section 1 code exceptions: **0**. Declared unsupported open fields: **none**. Passive lane-delivery FIFOs are not permitted. | App Server exposes every typed open value; idle lane delivery uses the ordinary native turn start through the shared Worker. |
 | Size cap | **700 production / 700 test logical lines**, including App Server framing and session code but excluding the shared wrapper host. | Native protocol code must be counted with the product that requires it; host-global coordination is forbidden. |
@@ -2073,7 +2125,7 @@ is present, the kit scrubs and rejects it instead of passing it onward.
 | Open and resume | The resident wrapper receives `session.open` before it starts the private leader. For a fresh lane it holds `locks/grok/<launch-token-digest>`, uses the same digest for the private lane-socket path, starts Grok without `--session-id`, and calls ACP `session/new`; Grok's returned ID becomes the session ID, then the wrapper renames the lock to `locks/grok/<session_id>` without replacing an existing lock and applies the composed title through the observer rename primitive. Resume locks `locks/grok/<resume_session_id>` directly, starts no argv resume selector, and calls `session/load` for that ID. It puts `--permission-mode`, `--reasoning-effort`, `-m`, and ordered `arguments` on the process command line, with `cwd` as the child working directory. | Grok Build 1.0.13 ignores a fresh `--session-id` in this ACP entry; `session/new` returns the product-owned ID and `session/load` is the sole resume selector. ACP `_meta` exposes only `yoloMode` / `autoMode`; it is not an open-field transport. All five fields and the title are applied at open. The existing 15-second startup hold remains inside `spawnTransactionTimeout = 60s`. |
 | Run | Call ACP `session/prompt`, consume only update notifications carrying that prompt's ID, and return its stop reason and accumulated output. Notifications from any other product turn are ignored. | One Sessionbus run owns one native prompt; an unrelated product turn cannot become its result. `grok_native_session.go:270-308` is the resident prompt primitive. |
 | Tools | In lane mode the wrapper publishes `lanes/<launch-token-digest>.sock`, and each stdio helper is a stateless action hop to the lane-owned caller. In peer mode the product-spawned resident helper serves MCP in-process over its own peer-owned caller; it has no private endpoint and no launcher-side caller. | ACP is the wrapper-to-Grok control protocol; MCP is the product-facing Sessionbus tool boundary. Caller state lives in the resident owner in both modes, never in a transient action hop. |
-| Deliver | Idle delivery starts native work. Lane mode receives a full delivery seed through the shared Worker Run; interactive mode uses the product-owned native wake path. Active delivery must be consumed or automatically continued across completion. Report only the demonstrated admission boundary. | The message itself requests work. Product-native transport and admission details are recorded in the sessionbus-peers product ledger; passive FIFO storage until a later explicit prompt is not conforming. |
+| Deliver | Idle delivery starts native work. Lane mode receives a full delivery seed through the shared Worker Run; interactive mode uses the product-owned native wake path. Active delivery must meet Section 1's required active-work delivery contract; continuation after completion is only completion-race recovery, not a substitute for mid-task delivery. Report only the demonstrated admission boundary. | The message itself requests work. Product-native transport and admission details are recorded in the sessionbus-peers product ledger; passive FIFO storage until a later explicit prompt is not conforming. |
 | Interrupt and close | Interrupt sends one ACP `session/cancel` notification; `{}` means the notification was sent, not that the run has stopped. The worker kit's universal close path interrupts an active lane run and waits for its terminal before invoking Grok's `close`, which releases the primary, observer, leader, private socket, and lock. In peer mode helper EOF releases its observer and peer, while launcher shutdown joins the TUI, quiet hold, and leader. | Grok adds no close timer: the daemon's single 10-second `closeBound` closes the worker and kills its process group if lane cleanup stalls. Grok's close callback never receives an active run; peer processes follow the product-owned stdio and launcher lifetimes. |
 | Exception ledger | Section 1 code exceptions: **0**. Declared unsupported open fields: **none**. Passive lane-delivery FIFOs are not permitted. | Grok exposes active interjection and all typed open controls; idle delivery starts a native turn through the shared Worker. |
 | Size cap | **975 production / 930 test logical lines**, including ACP framing, both launcher modes, helper-owned peer mode, and leader bootstrap but excluding the shared wrapper host. | The measured implementation is 968 / 930. The peer launcher owns only leader, quiet hold, TUI, and argument translation; the product-spawned helper owns peer, caller, in-process tools, and its lazy observer. |
@@ -2087,7 +2139,7 @@ is present, the kit scrubs and rejects it instead of passing it onward.
 | Open and resume | Initialize ACP v1, mint a v4 ID for fresh open and pass it in `_meta["qwen-code/sessionId"]` to `session/new`, or use capability-checked `session/resume` with `resume_session_id`; verify and return the exact product ID, then rename fresh sessions to the composed title. Supported open fields are `cwd`, `permission_mode`, `model`, and `arguments`; model maps to `-m`. Default permission uses Qwen's ordinary mode; bypass adds `--yolo` and verifies the returned mode. Arguments may not claim `--acp`, approval/yolo, resume/continue/session-id, prompt/input/output, or name controls. | Qwen Code 0.23.0 accepts the session ID metadata, resume, and `-m`; it exposes no reasoning-effort flag or ACP field. The wrapper mints only because Qwen requires the caller-provided UUID and fails closed on reserved controls. |
 | Run | Start `session/prompt`, accumulate session updates, and resolve the matching future to a terminal result. | `lane.go:199-263` and `client.go` prove the one ACP request/future. |
 | Tools | In both modes ACP `mcpServers` starts stateless `qwen-peer mcp` calls against the resident wrapper's private Unix endpoint; the wrapper owns the caller and its peer or worker connection. | c5 already injects an MCP server during `session/new` (`lane.go:134`); the product-spawned helper remains the tool entry but owns no connection or caller state. |
-| Deliver | Idle delivery starts native work. Lane mode receives a full delivery seed through the shared Worker Run; interactive mode uses the product-owned native wake path. Active delivery must be consumed or automatically continued across completion. Report only the demonstrated admission boundary. | The message itself requests work. Product-native transport and admission details are recorded in the sessionbus-peers product ledger; passive FIFO storage until a later explicit prompt is not conforming. |
+| Deliver | Idle delivery starts native work. Lane mode receives a full delivery seed through the shared Worker Run; interactive mode uses the product-owned native wake path. Active delivery must meet Section 1's required active-work delivery contract; continuation after completion is only completion-race recovery, not a substitute for mid-task delivery. Report only the demonstrated admission boundary. | The message itself requests work. Product-native transport and admission details are recorded in the sessionbus-peers product ledger; passive FIFO storage until a later explicit prompt is not conforming. |
 | Interrupt and close | Interrupt calls `craft/cancelPendingPrompt`; close cancels the ACP lifetime and reaps the child. | `lane.go:265-310` proves both calls. |
 | Exception ledger | Section 1 code exceptions: **0**. Declared unsupported open field: `reasoning_effort`. Native mid-turn drain state remains product-owned; no passive lane FIFO may replace automatic processing. | Product help exposes model but no effort selector; permission vocabulary and reserved arguments stay wrapper data, and no Qwen condition enters the daemon. |
 | Size cap | **520 production / 600 test logical lines**, including ACP framing but excluding the shared wrapper host. | The current driver/client split contains generic actor state that disappears; all retained Qwen protocol code remains charged here. |
@@ -2101,7 +2153,7 @@ is present, the kit scrubs and rejects it instead of passing it onward.
 | Open and resume | After a v2 SDK capability probe and app-ready, create or fetch the exact product session, return its ID, apply the composed title and permission rules, and retain model/agent/variant defaults. Both products support all five open fields; ordered arguments allow only the documented `--agent` selector. | `opencodefamily/lane.go:69-187` proves the product primitives. The deployed pdev plugin/SDK is 1.2.10 while the CLI is 1.18.28, so the v2 probe must succeed before hello rather than trusting the CLI version. |
 | Run | Call `session.promptAsync`, follow the exact event stream, then fetch the matching assistant result. | `lane.go:168-337` and `client.go` contain the existing bounded HTTP/SSE primitive. |
 | Tools | The plugin's peer and worker modes use the same JS caller/worker kit and register the same product tool; there is no lane-local bridge endpoint. | The current plugins already own SDK tool registration in `9f366be:integrations/opencode/agent-sessions.mjs` and `9f366be:integrations/kilo/agent-sessions.mjs`; the token changes hello mode, not transport shape. |
-| Deliver | Idle delivery starts native work. Lane mode receives a full delivery seed through the shared Worker Run; interactive mode uses the product-owned native wake path. Active delivery must be consumed or automatically continued across completion. Report only the demonstrated admission boundary. | The message itself requests work. Product-native transport and admission details are recorded in the sessionbus-peers product ledger; passive FIFO storage until a later explicit prompt is not conforming. |
+| Deliver | Idle delivery starts native work. Lane mode receives a full delivery seed through the shared Worker Run; interactive mode uses the product-owned native wake path. Active delivery must meet Section 1's required active-work delivery contract; continuation after completion is only completion-race recovery, not a substitute for mid-task delivery. Report only the demonstrated admission boundary. | The message itself requests work. Product-native transport and admission details are recorded in the sessionbus-peers product ledger; passive FIFO storage until a later explicit prompt is not conforming. |
 | Interrupt and close | Interrupt calls the SDK abort endpoint and cancels event wait; close disposes the exact product session and lets the kit close the socket. | The plugin owns both session and connection, so no private server supervisor state enters the bus. |
 | Exception ledger | Section 1 code exceptions: **0** for both products. Declared unsupported open fields: **none**. Product lifecycle exceptions: **0** once the v2 SDK and delivery probes pass. | Dialect differences remain product SDK data; they never select a wire method or daemon branch. |
 | Size cap | Shared native plugin **750 production / 700 test**, plus **60 / 80** per boot-shim/dialect leaf, excluding the shared JS kit. | OpenCode and Kilo differ only in SDK dialect, permission mapping, and packaged entrypoint; product transport remains charged to this family. |
@@ -2115,7 +2167,7 @@ is present, the kit scrubs and rejects it instead of passing it onward.
 | Open and resume | Fresh mints a Pi-compatible ID, passes `--session-id <id>` and the composed product title, then returns the product state ID; resume passes `--session <resume_session_id>` and verifies the returned state. Pi supports all five open fields: model maps to `--model` and reasoning effort to independent `--thinking` before child spawn. | `pifamily/lane.go:76-173` and `quirks.go:113-134` prove the transaction; Pi product help exposes the exact session, model, and thinking flags. |
 | Run | Send RPC `prompt`, observe terminal JSONL events, and read the final assistant text. | `pifamily/lane.go:179-300` and `rpc.go` are the existing primitive. |
 | Tools | The retained Pi extension runs in peer mode with a direct JS-kit daemon connection, or in lane-local mode against the wrapper's private endpoint; both register the same caller tool. | `integrations/pi/pifamily.mjs:106-151` already owns product tool registration; only the selected connection mode changes. |
-| Deliver | Idle delivery starts native work. Lane mode receives a full delivery seed through the shared Worker Run; interactive mode uses the product-owned native wake path. Active delivery must be consumed or automatically continued across completion. Report only the demonstrated admission boundary. | The message itself requests work. Product-native transport and admission details are recorded in the sessionbus-peers product ledger; passive FIFO storage until a later explicit prompt is not conforming. |
+| Deliver | Idle delivery starts native work. Lane mode receives a full delivery seed through the shared Worker Run; interactive mode uses the product-owned native wake path. Active delivery must meet Section 1's required active-work delivery contract; continuation after completion is only completion-race recovery, not a substitute for mid-task delivery. Report only the demonstrated admission boundary. | The message itself requests work. Product-native transport and admission details are recorded in the sessionbus-peers product ledger; passive FIFO storage until a later explicit prompt is not conforming. |
 | Interrupt and close | Interrupt sends RPC `abort`; close reaps the exact RPC process while leaving its transcript durable. | `pifamily/lane.go:331-379` proves both operations. |
 | Exception ledger | Section 1 code exceptions: **0**. Declared unsupported open fields: **none**. Passive lane-delivery FIFOs are not permitted. | Model and thinking are process flags applied after open; idle delivery starts work through the shared Worker. |
 | Size cap | Shared Pi-family wrapper **650 production / 700 test**, plus Pi leaf **60 / 80**; includes JSONL framing and excludes only shared wrapper-host code. | Product quirks are fixed launch/terminal data, not lifecycle branches; native framing is not an uncounted utility. |
@@ -2129,7 +2181,7 @@ is present, the kit scrubs and rejects it instead of passing it onward.
 | Open and resume | Create or resume the exact OMP session, call `set_session_name` at fresh open so the product title equals the composed bus name, and apply mapped permissions. OMP supports all five typed open fields: cwd maps to `--cwd=`, model to `--model=`, and reasoning effort to `--thinking`. Its three documented extra arguments are `--tools`, `--exclude-tools`, and `--approval-mode`; conflicts with typed permission fail before spawn. | OMP product help exposes the typed flags, while its ready/RPC surface proves the title call. The default permission path fails closed when RPC approval mediation is unavailable; bypass maps explicitly to the product's noninteractive mode. |
 | Run | Send RPC `prompt`, accept OMP's declared terminal event, and read final assistant text through the family implementation. | `pifamily/rpc.go` contains the closed event decoder; OMP selects the terminal quirk rather than a second lifecycle. |
 | Tools | The retained OMP entrypoint loads the Pi-family plugin in peer/direct or lane/local mode and registers the same caller tool. | `9f366be:integrations/omp/agent-sessions.mjs` is already a three-line family entrypoint; the shared plugin owns mode selection. |
-| Deliver | Idle delivery starts native work. Lane mode receives a full delivery seed through the shared Worker Run; interactive mode uses the product-owned native wake path. Active delivery must be consumed or automatically continued across completion. Report only the demonstrated admission boundary. | The message itself requests work. Product-native transport and admission details are recorded in the sessionbus-peers product ledger; passive FIFO storage until a later explicit prompt is not conforming. |
+| Deliver | Idle delivery starts native work. Lane mode receives a full delivery seed through the shared Worker Run; interactive mode uses the product-owned native wake path. Active delivery must meet Section 1's required active-work delivery contract; continuation after completion is only completion-race recovery, not a substitute for mid-task delivery. Report only the demonstrated admission boundary. | The message itself requests work. Product-native transport and admission details are recorded in the sessionbus-peers product ledger; passive FIFO storage until a later explicit prompt is not conforming. |
 | Interrupt and close | RPC `abort` and exact process cleanup are identical to Pi. | No OMP-specific lifecycle callback is justified. |
 | Exception ledger | Section 1 code exceptions: **0**. Declared unsupported open fields: **none**. Passive lane-delivery FIFOs are not permitted. | OMP exposes every open value as a process flag; its dialect remains launch/result data only and never reaches the daemon or wire. |
 | Size cap | OMP leaf **60 production / 100 test** in addition to the shared Pi-family cap. | The leaf may declare quirks and permissions only. |

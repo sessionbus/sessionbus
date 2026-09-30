@@ -238,6 +238,44 @@ a human prompt or a separate `run`. Active delivery joins native processing;
 an input crossing the active-to-idle boundary must still be processed
 automatically. Admission refusal, capacity failure, and uncertain transport
 must remain explicit; none may be disguised as successful passive storage.
+
+**Required active-work delivery.** This is the original product requirement,
+not an optional adapter policy: every agent product, in both interactive and
+lane modes, MUST make a message arriving during ongoing work available to that
+work at the next supported native input/steering boundary. The adapter MUST NOT
+hold it until the entire task, agent run, or lane Run reaches its final terminal
+or becomes idle. An hour-long task must be able to receive corrections and
+coordinate with peers while it is still working. A native processing boundary
+may occur between model responses or tool steps; this does not require interrupting
+an in-flight model response or tool call instantaneously.
+
+A receipt describes admission evidence, not an exemption from this scheduling
+requirement. In particular, `queued_for_next_turn` MUST NOT be interpreted as
+permission to defer every busy message until after the whole current task.
+Products with no suitable native mechanism have a conformance gap to resolve
+or report explicitly; documenting eventual delivery does not make them conforming.
+Idle wake and recovery of an input that actually crosses completion remain
+required, but do not replace delivery during active work. Queue ownership,
+interruption loss, capacity, identity and no-replay remain separate obligations.
+Forced abort/restart or replay of an uncertain submission is not a substitute
+for active-work delivery.
+
+**Acceptance (BUSY-MID).** On each product's interactive and lane surfaces,
+start a multi-step task, send a unique message while that task remains active,
+and observe the agent consume and react to it before the original task's final
+terminal. Record the native identity, message, active-work evidence, reaction,
+and terminal ordering. A transport receipt, retained queue item, reply in a
+later Run, or automatic turn after final idle is insufficient. Existing evidence
+may be reused only if it demonstrates this ordering; otherwise the property is
+unverified. Retain historical tests and fixes, but do not carry their PASS labels
+from a weaker acceptance criterion.
+
+The [owner's verbatim requirement and the recorded acceptance failure](../../docs/requirements/ACTIVE-WORK-MESSAGING.md) are part of this requirement's
+provenance. Adapter limitations, receipt terminology, test fixtures and release
+reviews must not silently weaken it. A proposed relaxation must identify the
+behavior lost and obtain an explicit owner decision; a generic merge/release
+approval is not such a decision.
+
 Its result is exactly one closed receipt: `written`, `injected`,
 `queued_for_next_turn`, or `rejected` with a nonempty reason.
 
@@ -446,16 +484,23 @@ once with the observed native receipt and may block on its transport write.
 Adapters must call it outside native reader locks. Missing or uncertain receipt
 uses Internal/no_receipt, not a guessed refusal. Invalid receipt encoding or
 write failure closes the connection so the original request cannot hang.
-Active delivery keeps the ordinary native admission path and Run token. It must
-be consumed by that turn or automatically continued; no human prompt is needed.
+Active delivery keeps the ordinary native admission path and Run token and
+follows the required active-work delivery contract above. An automatic later
+Run is not a substitute for consumption during ongoing work.
 At the final native handoff, the product synchronizes delivery with native turn
-completion. If the turn ended, or the product has no source-proven automatic
-active-delivery path, and nothing was written, steered or queued, it returns
-`ProtocolError(-32004, not_running)`. Safe native mid-turn admission remains the
-preferred path; this refusal must precede any native submission. The kit also returns this error
+completion. If the turn ended and nothing was written, steered or queued, it
+returns `ProtocolError(-32004, not_running)`. This refusal must precede any
+native submission. The kit also returns this error
 without invoking the product when the run is already absent or its context is
 cancelled. The product check is still required: completion may race the kit's
 check. Never return this error after native admission or an uncertain write.
+
+**Current implementation gap.** Existing adapters may also return `not_running`
+while native work is still active because they lack an active-delivery path.
+The daemon fallback described below preserves automatic eventual processing;
+it does not satisfy active-work delivery in that case. That adapter behavior
+requires correction. The valid completion-race fallback and its no-replay
+protections must be preserved when correcting it.
 
 For this pre-submission refusal on an ordinary lane delivery, if ready already
 arrived, the daemon immediately admits the message as new work and returns its
@@ -630,9 +675,10 @@ adapters own no archival timer.
 - Same-identity replacement atomically makes the new peer current, sends
   `session.superseded` to the old exact connection, and prevents reconnection by
   that displaced identity instance.
-- Delivery is mandatory. Products that cannot inject during a native run queue
-  for the next turn in their wrapper and report that disposition; the daemon
-  has no injection capability flag or queue.
+- Delivery is mandatory during active work as well as at idle. Products must
+  meet the active-work delivery and BUSY-MID requirements in `message.deliver`.
+  A wrapper or daemon queue that waits for the entire active Run to finish is
+  not a conforming substitute. Receipt vocabulary is not a capability waiver.
 - A worker binary absent from PATH fails as `unknown_product`. A binary that
   starts but exits before hello fails describe or spawn with bounded trailing
   stderr and its exit code when one exists. Neither fabricates readiness.
