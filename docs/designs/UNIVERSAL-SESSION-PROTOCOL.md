@@ -242,6 +242,27 @@ label order after deduplication. There is no multicast timeout.
 
 #### `message.deliver`
 
+**Product boundary.** The target session's endpoint is part of the recipient
+product. It may be built into the native application or supplied by a helper,
+MCP server, plugin or extension; Sessionbus neither distinguishes these
+implementations nor needs their internal delivery details. Delivery to that
+endpoint is delivery to the product. Below, "adapter" and "integration" name
+that endpoint as part of the product. The receipt reports that protocol handoff,
+with the evidence described by its disposition below. There is no second
+Sessionbus delivery stage or receipt for the product's internal steering or for
+model consumption or reaction in the current protocol.
+
+An acknowledgment of actual model consumption could be considered in future
+as a separate receipt, without extending or delaying the delivery receipt. It
+is explicitly outside the current implementation effort and is not a prerequisite for delivery, wake or steering. No intermediate internal
+handoff acknowledgment is required by Sessionbus.
+
+The product integration is responsible for actually queueing input, waking an
+idle agent and feeding a busy agent's next supported model call. These are
+required product behaviors behind the endpoint, not additional daemon delivery
+stages. A receipt or a clean failure report does not implement them. Their
+implementation and testing must not be replaced by a stronger receipt protocol.
+
 The daemon sends `message.deliver` to the target session with the message ID,
 authoritative canonical `id@host`, optional `name@host` source identity, and body.
 Every product implements delivery while idle and while a turn is running.
@@ -254,15 +275,16 @@ must remain explicit; none may be disguised as successful passive storage.
 **Required active-work delivery.** This is the original product requirement,
 not an optional adapter policy: every agent product, in both interactive and
 lane modes, MUST make a message arriving during ongoing work available to that
-work at the next supported native input/steering boundary. The adapter MUST NOT
+work at the next supported native input/steering boundary. The product MUST NOT
 hold it until the entire task, agent run, or lane Run reaches its final terminal
 or becomes idle. An hour-long task must be able to receive corrections and
 coordinate with peers while it is still working. A native processing boundary
 may occur between model responses or tool steps; this does not require interrupting
 an in-flight model response or tool call instantaneously.
 
-A receipt describes admission evidence, not an exemption from this scheduling
-requirement. In particular, `queued_for_next_turn` MUST NOT be interpreted as
+A receipt is the product endpoint's answer, not evidence of model consumption
+or an exemption from this scheduling requirement. In particular,
+`queued_for_next_turn` MUST NOT be interpreted as
 permission to defer every busy message until after the whole current task.
 Products with no suitable native mechanism have a conformance gap to resolve
 or report explicitly; documenting eventual delivery does not make them conforming.
@@ -282,8 +304,12 @@ may be reused only if it demonstrates this ordering; otherwise the property is
 unverified. Retain historical tests and fixes, but do not carry their PASS labels
 from a weaker acceptance criterion.
 
+This is a product behavior test, not a runtime acknowledgment required by
+Sessionbus. The daemon does not inspect model calls or wait for this reaction
+before reporting delivery to the product.
+
 The [owner's verbatim requirement and the recorded acceptance failure](../../docs/requirements/ACTIVE-WORK-MESSAGING.md) are part of this requirement's
-provenance. Adapter limitations, receipt terminology, test fixtures and release
+provenance. Product implementation limitations, receipt terminology, test fixtures and release
 reviews must not silently weaken it. A proposed relaxation must identify the
 behavior lost and obtain an explicit owner decision; a generic merge/release
 approval is not such a decision.
@@ -291,19 +317,22 @@ approval is not such a decision.
 Its result is exactly one closed receipt: `written`, `injected`,
 `queued_for_next_turn`, or `rejected` with a nonempty reason.
 
-> `written` means the integration completed one local transport write of the complete frame addressed to the native session captured for that delivery, using that session's product-owned carrier, with no explicit transport/native error observed before the result was emitted. It acknowledges only the local write. It does not assert that the native process parsed the frame, accepted its session ID, scheduled or retained the message, presented it, or consumed it. A native EOF without response bytes adds no acknowledgment. Absence of an observed rejection is not proof of acceptance.
+The dispositions are the product endpoint's truthful reports. They do not
+expose another endpoint for the daemon to deliver to or wait on.
+
+> `written` reports that the product endpoint completed one local transport write of the complete frame to its captured session, with no explicit error observed before answering. This is the endpoint's report of its internal handoff, not a separate Sessionbus delivery stage. It acknowledges only that write, not parsing, session-ID acceptance, retention, scheduling, presentation or model consumption. EOF without response bytes adds no acknowledgment; absence of an observed rejection is not proof of acceptance.
 >
-> `injected` remains reserved for an identity-bound native admission acknowledgment. `queued_for_next_turn` acknowledges input retained for automatic processing. For peers this requires demonstrated native scheduling; for lanes it can also acknowledge the daemon's bounded queue after a definite pre-submission refusal. Neither means native admission, durability, or proof of model consumption. It must not mean waiting for another human prompt or explicit Run. Products must preserve the idle-wake and active-to-idle handoff requirement. Legacy adapters that only retain input passively are not conforming. A completed local write alone qualifies only as `written`; `accepted` is reserved for an explicit retention undertaking and is not an alias of `written`.
+> `injected` reports an identity-bound admission acknowledgment observed by the product endpoint. `queued_for_next_turn` acknowledges input retained for automatic processing. For peers, the product must actually schedule that processing; for lanes it can also acknowledge the daemon's bounded queue after a definite pre-submission refusal. Queueing does not establish injection, durability or model consumption. It must not mean waiting for another human prompt or explicit Run. Products must preserve idle wake and the active-to-idle handoff; passive retention alone is not conforming. A local write alone qualifies only as `written`; an explicit retention undertaking is distinct from a write, and `accepted` is not an additional receipt disposition.
 >
-> The Claude interactive integration returns `written` at that local completion boundary. It preserves the captured native session ID and frame contents across asynchronous work; a later identity report never retargets the frame. A native-adapter `rejected` result requires an observed native refusal or a failure before any native submission, with a reason that identifies that boundary. An uncertain write or post-submission transport loss must not be represented as a native refusal or proof of non-consumption.
+> The product preserves the captured session identity and frame contents across asynchronous work; a later identity report never retargets the frame. A product `rejected` result requires an observed refusal or failure before submission, with a reason identifying that boundary. An uncertain write or post-submission transport loss must not be represented as a refusal or proof of non-consumption.
 
 For every non-rejected sender receipt, `session_id` and `delivery_id` are
-required and `reason` is absent. For an uncertain submission, the native
+required and `reason` is absent. For an uncertain submission, the product
 callback returns/throws the existing public `ProtocolError` with code `-32603`
 (`internal`) and a diagnostic string in `data` identifying that uncertainty.
 Both Peer and Worker kits preserve that RPC error instead of converting it to
-a native-adapter rejection. The daemon reports its existing `rejected/no_receipt`:
-no native receipt was obtained, and whether the product acted is unknown.
+a product rejection. The daemon reports its existing `rejected/no_receipt`:
+no product receipt was obtained, and whether the product acted is unknown.
 When the destination daemon rejects a delivery before enqueueing it because the
 selected target has no current connection, it instead reports
 `rejected/not_submitted`. That reason proves only this delivery attempt was not
@@ -492,8 +521,8 @@ passive delivery mode and no additional caller command is required. The Worker
 invokes `RunInput` with exactly one text input or full delivery seed. The seed
 preserves original message ID, source and body; its private transport run ID may
 be removed before the callback. `Run.ReportDelivery` answers that original RPC
-once with the observed native receipt and may block on its transport write.
-Adapters must call it outside native reader locks. Missing or uncertain receipt
+once with the product's receipt and may block on its transport write.
+Products must call it outside their internal reader locks. Missing or uncertain receipt
 uses Internal/no_receipt, not a guessed refusal. Invalid receipt encoding or
 write failure closes the connection so the original request cannot hang.
 Active delivery keeps the ordinary native admission path and Run token and
@@ -514,9 +543,12 @@ it does not satisfy active-work delivery in that case. That adapter behavior
 requires correction. The valid completion-race fallback and its no-replay
 protections must be preserved when correcting it.
 
+This fallback schedules work after the product's definite refusal; it is not
+a further delivery stage inside the product.
+
 For this pre-submission refusal on an ordinary lane delivery, if ready already
 arrived, the daemon immediately admits the message as new work and returns its
-native receipt. Otherwise it reserves one future worker record, retains the
+product receipt. Otherwise it reserves one future worker record, retains the
 message under its existing 256-call bound, and immediately answers the sender
 `queued_for_next_turn`. It must not hold the sender RPC until the recipient's
 turn ends: two active agents awaiting each other's send would deadlock.

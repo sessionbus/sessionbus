@@ -16,12 +16,35 @@ is insufficient. See [message.deliver in the protocol](../../bus/docs/PROTOCOL.m
 for the normative requirement, truthful receipt boundaries and BUSY-MID evidence.
 
 A native model response or tool operation need not be forcibly interrupted.
-An adapter must use the earliest supported input boundary within the ongoing
+A product must use the earliest supported input boundary within the ongoing
 work, rather than imposing a whole-task completion barrier. Where the native
 product cannot do that, record a conformance gap; do not redefine the requirement
 to match the implementation or claim that documentation alone fixes it.
 
 ## Verbatim owner statements
+
+### Product boundary, explicitly restated on 2026-09-30
+
+> from point of view of sessionbus protocol, our MCP or extension IS FUCKING PART OF PRODUCT.
+
+> so, sesionbus HAS delivered to product. this is fucking cut
+
+> sessionbus does not need to have  fucking details on how product support is implemented
+
+> sessionbus has no fucking idea, is it native part of product on implemented with help if additional helpers/MCP/extensions
+
+> the ONLY next level recept can be an actual consumption by model, but this MIGHT come later, and CAN NOT be part of current efforts
+
+Sessionbus delivers to the product endpoint. Native code, MCP servers, helpers
+and extensions are implementation choices behind that boundary. Internal
+queueing, idle wake and busy steering remain the product's responsibility;
+model consumption is not a further protocol receipt. Testing those behaviors
+must not be confused with requiring the daemon to observe them at runtime.
+An actual model-consumption acknowledgment is a possible separate future
+feature with a separate receipt; it must not extend or delay the delivery
+receipt and is explicitly excluded from the current effort.
+
+### Original active-work requirement
 
 The following are consecutive relevant owner statements from the discussion;
 intervening assistant/team messages are omitted. The first two are questions,
