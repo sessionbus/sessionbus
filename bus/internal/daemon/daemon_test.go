@@ -447,7 +447,7 @@ func TestLegacyDurableRowListsCompatibilityPolicy(t *testing.T) {
 	}
 }
 
-func TestTableRejectsUnknownColumnsAndDuplicateNames(t *testing.T) {
+func TestTableAllowsDuplicateNamesAndRejectsUnknownColumns(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "sessions")
 	must(t, os.MkdirAll(path, 0o700))
@@ -462,8 +462,10 @@ func TestTableRejectsUnknownColumnsAndDuplicateNames(t *testing.T) {
 	raw, err = json.Marshal(second)
 	must(t, err)
 	must(t, os.WriteFile(filepath.Join(path, rowFile(second.SessionID)), raw, 0o600))
-	if _, _, err := openTable(path); err == nil {
-		t.Fatalf("duplicate names = %v", err)
+	_, rows, err := openTable(path)
+	must(t, err)
+	if len(rows) != 2 || rows[0].SessionID == rows[1].SessionID {
+		t.Fatalf("equal-name rows = %+v", rows)
 	}
 	var object map[string]any
 	must(t, json.Unmarshal(raw, &object))
@@ -718,9 +720,12 @@ func TestSpawnRunCloseResumeForgetAndRestart(t *testing.T) {
 	if code := rpcCode(parent.call("turn.interrupt", protocol.SessionTarget{SessionID: spawned.SessionID}, &struct{}{})); code != protocol.NotRunning {
 		t.Fatalf("idle interrupt code = %d", code)
 	}
-	if code := rpcCode(parent.call("lane.spawn", protocol.LaneSpawnRequest{Name: "child", Product: "fixture-worker", Open: &protocol.OpenOptions{}}, &spawned)); code != protocol.NameTaken {
-		t.Fatalf("duplicate name code = %d", code)
+	var equalName protocol.LaneSpawnResult
+	must(t, parent.call("lane.spawn", protocol.LaneSpawnRequest{Name: "child", Product: "fixture-worker", Open: &protocol.OpenOptions{}}, &equalName))
+	if equalName.SessionID == spawned.SessionID {
+		t.Fatal("equal names reused an ID")
 	}
+	must(t, parent.call("session.close", protocol.SessionCloseRequest{SessionID: equalName.SessionID, Forget: true}, &struct{}{}))
 	blocked := make(chan error, 1)
 	go func() {
 		blocked <- parent.call("turn.run", protocol.TurnRunRequest{SessionID: spawned.SessionID, Input: "block"}, &turn)
@@ -751,7 +756,7 @@ func TestSpawnRunCloseResumeForgetAndRestart(t *testing.T) {
 	rawOpen, err := os.ReadFile(filepath.Join(directory, "open.log"))
 	must(t, err)
 	lines := strings.Split(strings.TrimSpace(string(rawOpen)), "\n")
-	if len(lines) != 2 || lines[0] != lines[1] || !strings.Contains(lines[0], `"arguments":["--flag"]`) {
+	if len(lines) != 3 || lines[0] != lines[2] || lines[1] != "{}" || !strings.Contains(lines[0], `"arguments":["--flag"]`) {
 		t.Fatalf("resume open values = %q", lines)
 	}
 	must(t, parent.call("session.close", protocol.SessionCloseRequest{SessionID: spawned.SessionID, Forget: true}, &struct{}{}))
@@ -790,7 +795,9 @@ func TestOfflineLaneCloseAndForget(t *testing.T) {
 	historyPath := filepath.Join(directory, "native-history.jsonl")
 	history := []byte("native history remains product-owned\n")
 	must(t, os.WriteFile(historyPath, history, 0o600))
-	must(t, owner.call("session.close", protocol.SessionCloseRequest{SessionID: lane.SessionID}, &struct{}{}))
+	if code := rpcCode(owner.call("session.close", protocol.SessionCloseRequest{SessionID: lane.SessionID}, &struct{}{})); code != protocol.UnknownSession {
+		t.Fatalf("archived plain close = %d", code)
+	}
 	assertOfflineLane(t, owner, lane.SessionID)
 	must(t, first.Close())
 
@@ -808,8 +815,11 @@ func TestOfflineLaneCloseAndForget(t *testing.T) {
 	item := second.directory.entries[lane.SessionID]
 	item.claimed = true
 	second.directory.mu.Unlock()
-	if code := rpcCode(owner.call("session.close", protocol.SessionCloseRequest{SessionID: lane.SessionID}, &struct{}{})); code != protocol.Busy {
-		t.Fatalf("claimed offline close code = %d", code)
+	if code := rpcCode(owner.call("session.close", protocol.SessionCloseRequest{SessionID: lane.SessionID}, &struct{}{})); code != protocol.UnknownSession {
+		t.Fatalf("claimed archived plain close code = %d", code)
+	}
+	if code := rpcCode(owner.call("session.close", protocol.SessionCloseRequest{SessionID: lane.SessionID, Forget: true}, &struct{}{})); code != protocol.Busy {
+		t.Fatalf("claimed archived forget code = %d", code)
 	}
 	second.directory.mu.Lock()
 	item.claimed = false
@@ -1270,9 +1280,9 @@ func TestUnnamedPeerHelloDeliveryAndTitleAssertions(t *testing.T) {
 		}
 	}
 	d.directory.mu.Lock()
-	found, ambiguous := d.directory.resolveLocked("", []string{"team"})
+	found := matchingEntries(d.directory.connected, "", []string{"team"})
 	d.directory.mu.Unlock()
-	if found != nil || ambiguous {
+	if len(found) != 0 {
 		t.Fatal("unnamed peer matched empty name")
 	}
 	var sent protocol.MessageSendResult

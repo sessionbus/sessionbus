@@ -304,7 +304,7 @@ func TestParentTraceDifferentParentsReceiveOwnProjection(t *testing.T) {
 	traceAbsent(t, twoParent)
 }
 
-func TestParentTraceOfflineTargetIncludesUnsubmittedOutcome(t *testing.T) {
+func TestParentTraceOfflineTargetIsUnknownWithoutCopy(t *testing.T) {
 	d, parent := traceFixture(t)
 	child := traceSpawn(t, parent, "offline", "content", true)
 	must(t, parent.call("session.close", protocol.SessionCloseRequest{SessionID: child}, &struct{}{}))
@@ -312,14 +312,11 @@ func TestParentTraceOfflineTargetIncludesUnsubmittedOutcome(t *testing.T) {
 	sender := connectPeer(t, d.config.SocketPath, "sender", "sender", "team")
 	var result protocol.MessageSendResult
 	must(t, sender.call("message.send", protocol.MessageSendRequest{Target: "parent/offline", Message: "cannot dispatch"}, &result))
-	_, body := traceReceive(t, parent)
-	if len(body.Deliveries) != 1 || body.Deliveries[0].SessionID != child || body.Deliveries[0].Reason != "not_submitted" || body.Deliveries[0].DeliveryID != "" {
-		t.Fatalf("offline observation: %+v", body)
-	}
-	if result.Deliveries[0].SessionID != "" {
-		t.Fatal("trace altered original public receipt")
+	if len(result.Deliveries) != 1 || result.Deliveries[0].Disposition != "rejected" || result.Deliveries[0].Reason != "unknown_session" || result.Deliveries[0].SessionID != "" || result.Deliveries[0].DeliveryID != "" {
+		t.Fatalf("archived target receipt: %+v", result)
 	}
 	traceIdle(t, d)
+	traceAbsent(t, parent)
 }
 
 func TestParentTraceLocalPolicyChangeWhileOriginalIsPending(t *testing.T) {

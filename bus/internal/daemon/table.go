@@ -37,7 +37,7 @@ func openTable(path string) (*table, []row, error) {
 		return nil, nil, err
 	}
 	var rows []row
-	ids, names := map[string]bool{}, map[string]bool{}
+	ids := map[string]bool{}
 	for _, file := range files {
 		if filepath.Ext(file.Name()) != ".json" {
 			continue
@@ -50,7 +50,7 @@ func openTable(path string) (*table, []row, error) {
 		var value row
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.DisallowUnknownFields()
-		if readErr != nil || json.Unmarshal(raw, &fields) != nil || (len(fields) != 6 && len(fields) != 7) || decoder.Decode(&value) != nil || file.Name() != rowFile(value.SessionID) || value.Name == "" || len(value.Groups) < 2 || ids[value.SessionID] || names[value.Name] {
+		if readErr != nil || json.Unmarshal(raw, &fields) != nil || (len(fields) != 6 && len(fields) != 7) || decoder.Decode(&value) != nil || file.Name() != rowFile(value.SessionID) || value.Name == "" || len(value.Groups) < 2 || ids[value.SessionID] {
 			return nil, nil, errors.New("invalid durable session table")
 		}
 		if len(fields) == 6 {
@@ -75,7 +75,7 @@ func openTable(path string) (*table, []row, error) {
 				return nil, nil, errors.New("invalid durable lane policy")
 			}
 		}
-		ids[value.SessionID], names[value.Name] = true, true
+		ids[value.SessionID] = true
 		rows = append(rows, cloneRow(value))
 	}
 	return t, rows, nil

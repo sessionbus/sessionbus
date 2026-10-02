@@ -25,7 +25,10 @@ func TestFederatedAdmissionKeepsRunInterruptOrder(t *testing.T) {
 	d, target, _ := reviewSession(t)
 	d.host = "beta"
 	item := &entry{row: row{SessionID: "lane@beta", CreatedAt: time.Now(), Groups: []string{"team"}}, attachment: target, done: make(chan struct{})}
+	d.directory.mu.Lock()
 	d.directory.entries[item.row.SessionID] = item
+	d.directory.addConnected(item)
+	d.directory.mu.Unlock()
 	from := federation.Caller{Groups: []string{"team"}}
 	for _, request := range []federation.PublicRequest{
 		{Method: "turn.run", Params: []byte(`{"session_id":"lane@beta","input":"go"}`)},
@@ -263,7 +266,10 @@ func TestForwardedDeliveryKeepsCapturedProduct(t *testing.T) {
 	d, target, _ := reviewSession(t)
 	d.host = "beta"
 	item := &entry{row: row{SessionID: "receiver@beta", CreatedAt: time.Now(), Groups: []string{"team"}}, attachment: target, done: make(chan struct{})}
+	d.directory.mu.Lock()
 	d.directory.entries[item.row.SessionID] = item
+	d.directory.addConnected(item)
+	d.directory.mu.Unlock()
 	from := federation.Caller{SessionID: "sender@alpha", Name: "old name@alpha", Product: "old-product", Groups: []string{"team"}}
 	wait, err := d.directory.admitFederation(federation.IncomingCall{From: from, Request: federation.PublicRequest{Method: "message.send", Params: []byte(`{"target":"receiver@beta","message":"hello"}`)}})
 	if err != nil {

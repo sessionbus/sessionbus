@@ -33,7 +33,7 @@ type directory struct {
 	mu           sync.Mutex
 	closing      bool
 	entries      map[string]*entry
-	names        map[string]*entry
+	connected    map[string]*entry
 	tokens       map[string]*launch
 }
 
@@ -46,10 +46,10 @@ type selected struct {
 }
 
 func newDirectory(daemon *Daemon, rows []row) *directory {
-	d := &directory{daemon: daemon, entries: map[string]*entry{}, names: map[string]*entry{}, tokens: map[string]*launch{}, remoteOwners: map[string]*ownership{}}
+	d := &directory{daemon: daemon, entries: map[string]*entry{}, connected: map[string]*entry{}, tokens: map[string]*launch{}, remoteOwners: map[string]*ownership{}}
 	for _, value := range rows {
 		item := &entry{row: cloneRow(value), done: closedChannel()}
-		d.entries[value.SessionID], d.names[value.Name] = item, item
+		d.entries[value.SessionID] = item
 	}
 	return d
 }
@@ -88,6 +88,7 @@ func (d *directory) installPeer(owner *session, hello *protocol.PeerHello, host 
 		d.end(found)
 	}
 	d.entries[id] = item
+	d.addConnected(item)
 	return item, displaced, ended, true
 }
 
@@ -152,12 +153,12 @@ func (d *directory) offline(item *entry, owner *session, forget bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if item.attachment == owner {
+		d.removeConnected(item)
 		item.attachment, item.running = nil, false
 	}
 	item.claimed = false
 	if forget && d.entries[item.row.SessionID] == item {
 		delete(d.entries, item.row.SessionID)
-		delete(d.names, item.row.Name)
 	}
 }
 
@@ -167,15 +168,11 @@ func (d *directory) reserveFresh(value row, start *launch) (*entry, int) {
 	if start.parent == nil || start.parent.ended {
 		return nil, protocol.NotConnected
 	}
-	if d.names[value.Name] != nil {
-		return nil, protocol.NameTaken
-	}
 	if code := d.addLaunch(start); code != 0 {
 		return nil, code
 	}
 	item := &entry{row: cloneRow(value), parent: start.parent, claimed: true, done: make(chan struct{})}
 	start.entry = item
-	d.names[value.Name] = item
 	return item, 0
 }
 
@@ -205,7 +202,7 @@ func (d *directory) reserveResume(id string, groups []string, start *launch) (*e
 	item := &entry{row: cloneRow(previous.row), parent: start.parent, claimed: true, done: make(chan struct{})}
 	item.row.Policy = policy
 	start.previous = previous
-	d.entries[id], d.names[item.row.Name], start.entry, start.product = item, item, item, item.row.Product
+	d.entries[id], start.entry, start.product = item, item, item.row.Product
 	return item, 0
 }
 
@@ -256,6 +253,7 @@ func (d *directory) publish(start *launch, owner *session, createdAt time.Time) 
 	}
 	item.claimed = false
 	item.attachment = owner
+	d.addConnected(item)
 	item.lifetime = &ownership{id: item.row.SessionID, token: randomID("owner"), destinations: map[string]bool{}}
 	if start.input != nil && item.parent != nil && !item.parent.ended {
 		item.traceMode = start.input.Trace
@@ -315,42 +313,56 @@ func (d *directory) releaseLaunch(start *launch) {
 	d.end(item)
 	if start.previous != nil {
 		d.entries[item.row.SessionID] = start.previous
-		d.names[item.row.Name] = start.previous
 	}
 	if !item.peer && item.row.CreatedAt.IsZero() {
-		delete(d.names, item.row.Name)
 		if d.entries[item.row.SessionID] == item {
 			delete(d.entries, item.row.SessionID)
 		}
 	}
 }
 
-func (d *directory) resolveLocked(canonical string, groups []string) (*entry, bool) {
-	if item := d.entries[canonical]; visibleTo(item, groups) {
-		return item, false
+// Target commands use only connected entries. Identity-filtered list and
+// forget are record-side; resume and trace have their existing ID-only paths.
+func (d *directory) candidatesLocked(method string, params any) map[string]*entry {
+	switch method {
+	case "session.list":
+		if params.(*protocol.SessionListRequest).SessionID != "" {
+			return d.entries
+		}
+	case "session.close":
+		if params.(*protocol.SessionCloseRequest).Forget {
+			return d.entries
+		}
+	case "message.send", "turn.run", "turn.start", "turn.status", "turn.wait", "turn.ack", "turn.interrupt":
+		// Active-target commands, including idle connected workers.
 	}
-	var found *entry
-	for _, item := range d.entries {
+	return d.connected
+}
+
+func matchingEntries(entries map[string]*entry, canonical string, groups []string) []*entry {
+	if item := entries[canonical]; visibleTo(item, groups) {
+		return []*entry{item}
+	}
+	var found []*entry
+	for _, item := range entries {
 		if item.row.Name != "" && item.row.Name == canonical && visibleTo(item, groups) {
-			if found != nil {
-				return nil, true
-			}
-			found = item
+			found = append(found, item)
 		}
 	}
-	return found, false
+	return found
 }
 
 func visibleTo(item *entry, groups []string) bool {
 	return item != nil && (item.peer || !item.row.CreatedAt.IsZero()) && shares(groups, item.row.Groups)
 }
 
-func (d *directory) selectEntries(groups, labels []string, group string, names bool, omit *entry, request *routedRequest) ([]selected, int) {
+func (d *directory) selectEntries(groups, labels []string, group, method string, params any, omit *entry, request *routedRequest) ([]selected, int) {
 	d.mu.Lock()
-	var offlineClose *entry
-	result := make([]selected, 0, len(d.entries))
+	var offlineForget *entry
+	entries := d.candidatesLocked(method, params)
+	result := make([]selected, 0, len(entries))
 	if labels == nil {
-		for _, item := range d.entries {
+		for _, item := range entries {
 			if !visibleTo(item, groups) || group != "" && (item == omit || !slices.Contains(item.row.Groups, group)) {
 				continue
 			}
@@ -361,7 +373,7 @@ func (d *directory) selectEntries(groups, labels []string, group string, names b
 		return result, 0
 	}
 	valid := validIDPart
-	if names {
+	if method == "message.send" || method == "session.list" {
 		valid = validNamePart
 	}
 	for _, label := range labels {
@@ -370,49 +382,51 @@ func (d *directory) selectEntries(groups, labels []string, group string, names b
 			d.mu.Unlock()
 			return nil, code
 		}
-		item, ambiguous := d.resolveLocked(canonical, groups)
-		value := selected{label: label, item: item, code: code, ambiguous: ambiguous}
-		if item != nil {
-			value.summary = summarize(item)
+		matches := matchingEntries(entries, canonical, groups)
+		if method == "session.list" && len(matches) != 0 {
+			for _, item := range matches {
+				result = append(result, selected{label: label, item: item, code: code, summary: summarize(item)})
+			}
+			continue
+		}
+		value := selected{label: label, code: code, ambiguous: len(matches) > 1}
+		if len(matches) == 1 {
+			value.item, value.summary = matches[0], summarize(matches[0])
 		}
 		result = append(result, value)
 	}
 	if request != nil && result[0].code == 0 && result[0].item != nil && !result[0].ambiguous {
 		item := result[0].item
 		if request.method == "session.close" && !item.peer && item.attachment == nil && !item.claimed {
-			// An offline durable lane has no Worker to receive close. Claim its
+			// Only record-side forget can select an offline lane. Claim its
 			// exact row before dropping the mutex so resume or another cleanup
-			// cannot race the row-only operation below.
+			// cannot race the row deletion below.
 			item.claimed = true
-			offlineClose = item
+			offlineForget = item
 		} else {
 			result[0].code = d.routeLocked(item, request.method, *request)
 		}
 	}
 	d.mu.Unlock()
-	if offlineClose != nil {
-		d.finishOfflineClose(offlineClose, *request)
+	if offlineForget != nil {
+		d.finishOfflineForget(offlineForget, *request)
+	}
+	if method == "session.list" {
+		sort.Slice(result, func(left, right int) bool { return result[left].summary.SessionID < result[right].summary.SessionID })
 	}
 	return result, 0
 }
 
-func (d *directory) finishOfflineClose(item *entry, request routedRequest) {
-	forget := request.params.(*protocol.SessionCloseRequest).Forget
-	var err error
-	if forget {
-		err = d.daemon.table.delete(item.row.SessionID)
-	}
+func (d *directory) finishOfflineForget(item *entry, request routedRequest) {
+	err := d.daemon.table.delete(item.row.SessionID)
 
 	completed := false
 	d.mu.Lock()
 	if d.entries[item.row.SessionID] == item && item.attachment == nil && item.claimed {
 		completed = true
 		item.claimed = false
-		if forget && err == nil {
+		if err == nil {
 			delete(d.entries, item.row.SessionID)
-			if d.names[item.row.Name] == item {
-				delete(d.names, item.row.Name)
-			}
 		}
 	}
 	d.mu.Unlock()
@@ -472,11 +486,24 @@ func (d *directory) routeLocked(item *entry, method string, request routedReques
 }
 
 func (d *directory) end(item *entry) {
+	d.removeConnected(item)
 	item.traceMode = ""
 	item.traceVersion = ""
 	d.endOwner(item.lifetime)
 	item.attachment, item.running = nil, false
 	close(item.done)
+}
+
+// Called only at attachment transitions while d.mu is held. A stale owner
+// ending cannot remove a replacement entry with the same ID.
+func (d *directory) addConnected(item *entry) {
+	d.connected[item.row.SessionID] = item
+}
+
+func (d *directory) removeConnected(item *entry) {
+	if d.connected[item.row.SessionID] == item {
+		delete(d.connected, item.row.SessionID)
+	}
 }
 
 func closedChannel() chan struct{} {

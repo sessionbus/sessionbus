@@ -162,7 +162,7 @@ and JavaScript `rehello(signal, undefined, info)` explicitly remove a name.
 Every rehello is a complete identity assertion: an omitted name means no name
 now. The adapter sends that assertion only when the product reports removal.
 An explicit empty string on the wire is invalid. Lane names remain required
-and follow the existing daemon naming and uniqueness contract.
+and follow the daemon naming contract; names are not unique.
 
 A live peer may send another hello. With the same `session_id`, it updates the
 product-owned name and `info` in place; `groups` must equal the original
@@ -194,8 +194,11 @@ race is bounded and cannot flap indefinitely.
 #### `session.list`
 
 A connected session sends `session.list` with an optional `session_id` filter.
-The result contains the matching visible sessions, or all visible sessions when
-the filter is absent. Each item reports canonical `id@host` and, when named, `name@host`, whether its one
+Without `session_id`, including a host-only request, the result contains only
+visible sessions with an active connection. An explicit `session_id` filter is
+record lookup: an exact ID returns its visible row in either state; otherwise
+all visible records with that name are returned, including archived lanes. Each item reports canonical `id@host` and, when named,
+`name@host`, whether its one
 connection is open, and whether one run admission is active. Lane summaries also include normalized
 `policy`; peers have no lane policy. The host is already carried by both canonical identities, so no
 separate summary host field exists. This single method
@@ -213,6 +216,25 @@ the originating caller, including directed queries to another host. This is the
 same public identity used for message sources; credentials and owner tokens are
 never included. Use `self_info.session_id` to recognize self, not a name or list
 position. An unfiltered list includes the connected caller.
+
+Identity is unique by ID, never by name. Fresh spawn permits equal names even
+while another lane is connected. Active commands resolve IDs and names only
+in the connected-entry map, including idle workers; archived records are not
+candidates. Exact ID takes precedence. One matching name selects that entry;
+several return send's `rejected/ambiguous` or a control's `unknown_session`.
+With no active match, the target is `unknown_session`, even if a retained row
+has that ID or name. A name-filtered list supplies all visible IDs for choosing
+among duplicates. Control selectors retain the ID-part grammar; list filters
+accept names as send does, including whitespace.
+
+| Command | Candidate set |
+| --- | --- |
+| send, run/start, status, wait, ack, interrupt, plain close | Active connections only, by name or ID; group sends also exclude archives. |
+| list without `session_id`, including host-only list | Active connections only. |
+| list with explicit name/ID `session_id` | Visible records in both connection states; exact ID wins, name enumerates all matches. |
+| forget (`session.close`, `forget:true`) | Visible records in either state, by ID or unambiguous name. |
+| resume, trace | Existing exact-ID record paths; no by-name resume or trace. |
+
 
 Updated SDKs accept an absent `self_info` from older daemons; that means identity
 is unavailable in this response and must not be guessed. Previous SDKs reject
@@ -400,9 +422,9 @@ open fields, an invalid session ID, exit, or timeout fail truthfully and do not
 publish a live session.
 
 One lane owner processes the open result, exit, timeout, and shutdown in event
-order, so exactly one outcome finishes the request. A fresh spawn has no ID, so
-its composed name is reserved until the product returns an ID. The launch
-token, not a speculative ID, keys the provisional worker until open returns.
+order, so exactly one outcome finishes the request. A fresh spawn has no ID;
+its name is not reserved. The launch token, not a speculative ID, keys the
+provisional worker until open returns.
 Resume requires the returned ID
 to equal `resume_session_id`. A fresh open returning an ID already held by an
 existing row fails with `spawn_failed` and the exact text `session id already
@@ -643,8 +665,9 @@ bound forces a kill, worker EOF fails the outstanding caller exactly once; the d
 fabricates an interrupted result.
 
 After orderly close or unrequested EOF, the durable row is offline and
-resumable. A later close of that offline row succeeds without launching a
-worker and leaves the row resumable. `forget:true` deletes the offline durable
+resumable. Plain close targets active connections only, so a later close of
+that archived ID or name returns `unknown_session`. `forget:true` deletes the
+offline durable
 row directly; for a connected row it deletes only after the worker is stopped.
 Neither path opens or deletes product-owned native history. There is no closed
 row state. Independent terminal auto-close uses this same Close path; product
@@ -676,9 +699,9 @@ adapters own no archival timer.
 - `lane.spawn` with `resume_session_id` naming a connected row returns
   `already_connected`; lanes never use supersession to manufacture a second
   worker connection.
-- New `lane.spawn` requires a name not held by any row on that host; collision
-  returns `name_taken`. Every retained row reserves that name until an explicit
-  `session.close{forget:true}` deletes the row.
+- New `lane.spawn` never checks name uniqueness. Equal names may identify
+  different native IDs, whether connected or archived. Durable load retains
+  all of them while continuing to reject duplicate IDs and invalid rows.
 - A peer private group is `session:<id@host>`; a lane private group recursively
   appends `/<leaf>` to its parent's. A new lane receives exactly its parent's
   private group, its own private group, and explicit `extra_groups`; no other
@@ -689,9 +712,10 @@ adapters own no archival timer.
   group paths, and attached lane titles stay fixed.
 - A lane row is claimed for resume, close, or forget until that operation's
   cleanup finishes. New run, interrupt, close, resume, or forget requests for a
-  claimed row return `busy`; nothing waits on a row. Delivery to a claimed but
-  still attached lane proceeds. Fresh spawn reserves its composed name until
-  its product ID is known.
+  claimed connected row return `busy`; nothing waits on a row. Resume and
+  forget also reject a claimed archived row as `busy`. Active commands never
+  resolve that archived row. Delivery to a claimed but still attached lane
+  proceeds. Fresh spawn's launch token remains claimed through cleanup.
 - Resume acquires product-side exclusive ownership before touching the existing
   native session and holds it through cleanup. Fresh open does the same before
   create when the wrapper chooses the ID; when only the product can allocate the
@@ -701,10 +725,10 @@ adapters own no archival timer.
   child, so abrupt wrapper death cannot free the lock while a surviving child
   writes; contention is `spawn_failed` with `session busy`. A native product's
   own mechanism qualifies only when it excludes competing processes.
-- Run start/read/wait/ack or `turn.interrupt` addressed to a durable row without
-  a connection returns `not_connected`. `session.close` instead performs the
-  offline row operation described above. Resume is an explicit `lane.spawn`; a
-  caller kit may compose that automatically without changing the wire.
+- Active commands addressed to an archived lane by name or ID return the
+  existing unknown answer; they never read the record corpus. Forget is the
+  offline row operation described above. Resume is explicit `lane.spawn`
+  with `resume_session_id`; the caller kit does not automatically resume it.
 - `turn.interrupt` while no run is outstanding returns not-running. An accepted
   interrupt does not promise that the native product has already stopped.
 - Collector timeout/disappearance leaves the Worker cursor intact while the
@@ -733,8 +757,9 @@ adapters own no archival timer.
 
 This protocol deliberately does not compensate for five losses. A daemon crash
 before commit can orphan native files; workers exit on EOF and those files are
-garbage, not state. A successful spawn reply can be lost with its caller; the
-caller kit lists by name before spawning again. A caller can lose a completed
+garbage, not state. A successful spawn reply can be lost with its caller;
+there is no automatic lookup or respawn. A caller can explicitly list by name
+and choose an ID. A caller can lose a completed
 turn result after worker retirement, including explicit/automatic/owner close;
 resume does not recover that old answer. Collector loss alone retains it while
 the worker lives. No daemon restart or supervisor-replacement output recovery
@@ -809,8 +834,8 @@ and closes the connection without writing one.
 | ---: | --- | --- |
 | `-32600` | `invalid_frame` | Any method whose envelope, closed params, or daemon-checked identity grammar is invalid, but only when a valid request ID is recoverable. This includes a composed lane name beyond 128 characters. |
 | `-32602` | `invalid_hello` | `session.hello` when its union, protocol, identity, or token is invalid. |
-| `-32001` | `unknown_session` | `message.send`, resume `lane.spawn`, run start/read/wait/ack, `turn.interrupt`, or `session.close` when the named row or peer does not exist or is invisible to the caller. |
-| `-32002` | `not_connected` | Run start/read/wait/ack or `turn.interrupt` when a durable row has no connection. |
+| `-32001` | `unknown_session` | `message.send`, resume `lane.spawn`, run start/read/wait/ack, `turn.interrupt`, or `session.close` when no eligible target exists, the target is invisible, or a control name has several eligible matches. Active commands do not resolve archived IDs or names. |
+| `-32002` | `not_connected` | A selected-active connection is lost before dispatch or during a pending call; it is not an initial archived-target lookup result. |
 | `-32003` | `busy` | Run admission when the target already has an outstanding run or 256 retained records; out-of-order ack; a cursor read after close admission; a worker loop dequeuing a 257th unanswered call; a full 256-event connection inbox; or a new run, interrupt, close, resume, or forget for a claimed lane row. A delivery rejected by either bound has reason `busy`; delivery to a claimed but attached lane is still admitted. |
 | `-32004` | `not_running` | `turn.interrupt` when the target has no outstanding run; or an ordinary worker delivery refused before any native admission at a finished turn boundary, for daemon hold/reseed. |
 | `-32005` | `already_connected` | Resume `lane.spawn` when the durable row already has its worker connection. |
@@ -820,7 +845,7 @@ and closes the connection without writing one.
 | `-32010` | `timeout` | `lane.describe` or `lane.spawn` when its one spawn/open transaction bound expires. |
 | `-32011` | `not_committed` | Any worker-originated client-to-daemon session method received after hello but before product-session-ID commit. |
 | `-32012` | `superseded` | Any request from a peer connection displaced by exact directory replacement. |
-| `-32013` | `name_taken` | New `lane.spawn` when another row on that host already holds the requested composed name. |
+| `-32013` | `name_taken` | Historical name-reservation error retained in the published vocabulary; the current daemon does not emit it. |
 | `-32014` | `unknown_host` | `lane.describe` or new `lane.spawn` naming an unfederated `host`, or any canonical identity input whose host part is neither local nor connected. |
 | `-32015` | `forward_lost` | A one-hop federated request whose transport ends before its response; the request may or may not have been applied on the target host and is never retried. |
 | `-32016` | `unsupported_trace` | `trace.configure` or `lane.spawn.trace` when an involved federated host or hub cannot carry or enforce tracing. Upgrade every involved daemon and hub before retrying. |
@@ -854,8 +879,8 @@ Only lanes have durable rows. A row has exactly these columns:
 Each row is one JSON file named `<sha256(session_id)>.json`. A commit writes and
 syncs a temporary file, renames it to that name, and syncs the containing
 directory. Startup reads only committed `.json` names; an interrupted temporary
-file is ignored. An unknown column, wrong digest name, duplicate session ID, or
-duplicate canonical name makes the durable directory invalid.
+file is ignored. An unknown column, wrong digest name, or duplicate session ID makes the durable
+directory invalid. Equal canonical names are permitted.
 
 There are no durable peer rows. The daemon qualifies a peer hello's product-
 asserted ID and name parts with its effective host, then creates one transient
@@ -1020,13 +1045,19 @@ It creates one directory reservation containing the composed name, product,
 launch token, timer, and reply slot. The composed name is
 `<parent name part>/<caller leaf>@<target host>`; the groups are the parent
 private group, `<parent private group>/<leaf>`, and explicit `extra_groups`.
-The prospective name stays reserved through final process cleanup. Siblings are
-thereby unique, and two equal parent name parts with the same leaf collide; the
-second spawn receives `name_taken`.
+Names are never reserved. Equal parent names and leaves may produce equal
+composed names with distinct native session IDs. Same-named siblings under one
+parent share the composed private group: their direct children share visibility
+and ordinary group-authorized actions, and a group-addressed send reaches both
+connected members. This does not grant visibility to every descendant depth;
+equal names under different parent IDs need not share a private group. Lifetime
+and trace ownership remain ID/pointer-based; ordinary visibility remains
+group-based.
 
 Resume looks up the durable row, checks visibility, and claims that exact entry
-before exec. A resume claim has no live attachment until commit. Another run,
-interrupt, close, resume, or forget returns `busy` immediately; nothing waits.
+before exec. A resume claim has no live attachment until commit. Another
+resume or forget returns `busy` immediately; active commands cannot resolve
+that archived claim. Nothing waits.
 The owner reuses the row's product, composed name, groups, and stored open value.
 New and resumed launches both start
 `<product>` with empty argv and the token in the environment, consume hello,
@@ -1144,10 +1175,10 @@ resume is `unknown_session`. Forced cleanup settles the pending run once and
 persists no fabricated result. Cleanup and claim release never wait for writing
 the caller response.
 
-For an already-offline durable row, the daemon claims the exact row without
-starting a Worker. Plain close releases that claim and returns `{}` with the row
-unchanged. `forget:true` deletes the durable row file before removing the exact
-directory and name entries. A delete error returns `internal`, preserves the row,
+For an already-offline durable row, only `forget:true` claims the exact row
+without starting a Worker. It deletes the durable row file before removing the
+exact directory entry. Plain close never resolves archived IDs or names. A
+delete error returns `internal`, preserves the row,
 and releases the claim so the caller can retry. Normal visibility checks still
 apply; an invisible row is `unknown_session`, and a concurrent claimed cleanup
 is `busy`. This row-only path has no product-native history authority.
@@ -1164,8 +1195,9 @@ clocks. The third bounds one final socket write and never delays a writable
 connection. None is configuration or product-specific.
 
 The daemon sends at most one `session.close` request on a worker connection.
-A concurrent or later close while that row remains claimed receives `busy` and
-the caller retries after cleanup. A second `session.close` frame on the
+A concurrent close while that connected row remains claimed receives `busy`;
+after disconnect plain close cannot resolve it. Record-side forget still sees
+claimed cleanup as `busy`. A second `session.close` frame on the
 same worker connection is therefore a protocol violation and closes that
 connection without a reply.
 
@@ -1189,9 +1221,17 @@ registered work have ended; nothing commits afterward.
 
 ### 2.5 Listing, messaging, and federation
 
+The directory retains its record/ID-fencing map and a separate ID-keyed map of
+connected entries. Peer installation and successful lane publication add the
+exact entry; ending an attachment and matching-owner offline cleanup remove
+only that exact pointer under the directory mutex. Startup, launch reservation,
+resume claim and failed Open never enter the connected map. Terminal idle
+workers remain connected. Active commands never scan the record map.
+
 `session.list` copies one coherent metadata snapshot under the directory mutex:
-durable rows, transient peers, exact attachments, claims, and running
-projections. It performs no disk read and waits on no owner loop. Filtering and
+the connected map for default/host-only listing, or the record map for an
+explicit name/ID filter, with exact attachments, claims, and running projections.
+It performs no disk read and waits on no owner loop. Filtering and
 group visibility happen while selecting the snapshot; sorting and result
 assembly happen after unlock. No roster cache or projection stream exists.
 
@@ -1205,7 +1245,11 @@ compares that token when it dequeues the request, and response settlement checks
 it again; a same-socket identity change therefore cannot attach an old delivery
 or receipt to the new identity. Those deliveries run concurrently, and one response returns
 the receipts in label order after session-ID deduplication. There is no delivery
-timer. Offline lanes and failed calls produce rejected receipts. A full target
+timer. An initially archived target is unknown and has no target-parent trace
+copy. A target selected while active that disconnects before dispatch may still
+produce `not_submitted` and its captured trace; loss after dispatch stays
+uncertain. Source-child tracing is unchanged. Failed calls produce rejected
+receipts. A full target
 inbox or a target owner already holding 256 unanswered calls produces rejected
 reason `busy`. A claimed but still attached lane remains deliverable. If EOF or
 supersession ends the target connection before a receipt arrives, the sender
@@ -2286,7 +2330,7 @@ not a reason to move lines into a product integration.
 | C6 | Concurrent interrupts coalesce to one worker interrupt and idle interrupt maps `not_running`. |
 | C7 | Owner cleanup and terminal auto-close are independent and use ordinary Close. Open arms no deadline; admission cancels grace and proven refusal restores it. One 10-second close bound includes deferred execute acknowledgment, admitted-reader drain and reap; expiry invents no native terminal. Row remains resumable unless forget. |
 | C8 | Peer EOF reconnects; a new connection with the same canonical ID supersedes the displaced identity terminally. Same-ID re-hello refreshes name/info with fixed groups. Different-ID re-hello atomically detaches the old reply sinks, fails its pending deliveries once, removes its private group, and installs the new identity/group before acknowledgement; requests admitted before the switch retain the old source. |
-| C9 | The caller drives the remote row by canonical ID; offline resume replays the stored open value unchanged with argument order preserved; `name_taken`, `already_connected`, `not_connected`, forgotten-row `unknown_session`, disconnected-host `unknown_host`, and ambiguous one-hop loss `forward_lost` match Section 1.4; cleanup leaves no connection, process, token, or pending call. |
+| C9 | The caller drives the remote row by canonical ID; offline resume replays the stored open value unchanged with argument order preserved; duplicate names with distinct IDs, `already_connected`, initially archived-target `unknown_session`, selected-live connection-loss `not_connected`, forgotten-row `unknown_session`, disconnected-host `unknown_host`, and ambiguous one-hop loss `forward_lost` match Section 1.4; cleanup leaves no connection, process, token, or pending call. |
 
 | Trace | Worker against reference caller |
 | --- | --- |
