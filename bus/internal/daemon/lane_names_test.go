@@ -11,6 +11,52 @@ import (
 	"github.com/antst/sessionbus/bus/sdk/go/testsocket"
 )
 
+func TestArchivedLaneNamesWithSpacesRemainDiscoverable(t *testing.T) {
+	for _, names := range []struct {
+		label, parent, leaf string
+	}{
+		{"spaced leaf", "parent", "child space"},
+		{"spaced parent", "parent space", "child"},
+	} {
+		t.Run(names.label, func(t *testing.T) {
+			directory := t.TempDir()
+			installFixture(t, directory, "fixture-worker")
+			t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
+			_, socket := startDaemon(t)
+			parent := connectPeer(t, socket, "parent-id", names.parent, "team")
+			var lane protocol.LaneSpawnResult
+			must(t, parent.call("lane.spawn", protocol.LaneSpawnRequest{Name: names.leaf, Product: "fixture-worker", Open: &protocol.OpenOptions{}}, &lane))
+			must(t, parent.call("session.close", protocol.SessionCloseRequest{SessionID: lane.SessionID}, &struct{}{}))
+
+			// The exact archived ID must win over a visible peer with that name.
+			connectPeer(t, socket, "shadow-id", unqualify(lane.SessionID), "team")
+			var listed protocol.SessionListResult
+			must(t, parent.call("session.list", protocol.SessionListRequest{SessionID: lane.SessionID}, &listed))
+			if len(listed.Sessions) != 1 || listed.Sessions[0].SessionID != lane.SessionID || listed.Sessions[0].Connected {
+				t.Fatalf("exact-ID precedence = %+v", listed)
+			}
+			name := names.parent + "/" + names.leaf
+			for _, filter := range []string{name, qualify(name, "local")} {
+				listed = protocol.SessionListResult{}
+				must(t, parent.call("session.list", protocol.SessionListRequest{SessionID: filter}, &listed))
+				if len(listed.Sessions) != 1 || listed.Sessions[0].SessionID != lane.SessionID || listed.Sessions[0].Name != qualify(name, "local") || listed.Sessions[0].Connected {
+					t.Fatalf("archived name discovery %q = %+v", filter, listed)
+				}
+			}
+			id := listed.Sessions[0].SessionID
+			var resumed protocol.LaneSpawnResult
+			must(t, parent.call("lane.spawn", protocol.LaneSpawnRequest{ResumeSessionID: id}, &resumed))
+			if resumed.SessionID != id {
+				t.Fatalf("resume changed the discovered ID = %+v", resumed)
+			}
+			must(t, parent.call("session.close", protocol.SessionCloseRequest{SessionID: id, Forget: true}, &struct{}{}))
+			if code := rpcCode(parent.call("session.list", protocol.SessionListRequest{SessionID: name}, &listed)); code != protocol.UnknownSession {
+				t.Fatalf("forgotten name = %d", code)
+			}
+		})
+	}
+}
+
 func TestDuplicateLaneNamesKeepDistinctIDsAcrossRestart(t *testing.T) {
 	directory := testsocket.Directory(t)
 	installFixture(t, directory, "fixture-worker")

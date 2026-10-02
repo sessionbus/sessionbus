@@ -101,7 +101,7 @@ func (s *session) peerHello(frame protocol.Frame, hello *protocol.PeerHello) {
 func (s *session) list(frame protocol.Frame, input *protocol.SessionListRequest) {
 	caller := s.federationCaller()
 	if input.SessionID != "" {
-		canonical, host, code := canonicalTarget(input.SessionID, s.daemon.host, validIDPart)
+		canonical, host, code := canonicalTarget(input.SessionID, s.daemon.host, validNamePart)
 		if code == protocol.InvalidFrame {
 			s.reject(frame, code)
 			return

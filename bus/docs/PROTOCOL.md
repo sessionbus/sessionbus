@@ -212,8 +212,8 @@ candidates. Exact ID takes precedence. One matching name selects that entry;
 several return send's `rejected/ambiguous` or a control's `unknown_session`.
 With no active match, the target is `unknown_session`, even if a retained row
 has that ID or name. A name-filtered list supplies all visible IDs for choosing
-among duplicates. Control and list selectors retain the ID-part grammar;
-only send accepts names containing whitespace.
+among duplicates. Control selectors retain the ID-part grammar; list filters
+accept names as send does, including whitespace.
 
 | Command | Candidate set |
 | --- | --- |

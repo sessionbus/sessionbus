@@ -373,7 +373,7 @@ func (d *directory) selectEntries(groups, labels []string, group, method string,
 		return result, 0
 	}
 	valid := validIDPart
-	if method == "message.send" {
+	if method == "message.send" || method == "session.list" {
 		valid = validNamePart
 	}
 	for _, label := range labels {

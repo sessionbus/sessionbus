@@ -141,8 +141,8 @@ Use returned IDs for subsequent operations:
 Names are not unique; use the returned session ID to choose a specific lane.
 A name matching several active lanes makes send return `ambiguous` and lane
 controls return `unknown_session`. Use `list` with that name to obtain all
-visible matching IDs, including archived rows. Control and list selectors
-retain their existing ID-part grammar; whitespace names are accepted by send.
+visible matching IDs, including archived rows. Controls retain their existing
+ID-part grammar; list filters accept names as send does, including whitespace.
 
 **Downgrade:** Once duplicate lane names are stored, v0.5.10 refuses startup
 with `invalid durable session table`. Before downgrading to it, use a daemon
