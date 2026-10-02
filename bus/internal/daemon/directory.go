@@ -358,7 +358,7 @@ func visibleTo(item *entry, groups []string) bool {
 
 func (d *directory) selectEntries(groups, labels []string, group, method string, params any, omit *entry, request *routedRequest) ([]selected, int) {
 	d.mu.Lock()
-	var offlineClose *entry
+	var offlineForget *entry
 	entries := d.candidatesLocked(method, params)
 	result := make([]selected, 0, len(entries))
 	if labels == nil {
@@ -398,18 +398,18 @@ func (d *directory) selectEntries(groups, labels []string, group, method string,
 	if request != nil && result[0].code == 0 && result[0].item != nil && !result[0].ambiguous {
 		item := result[0].item
 		if request.method == "session.close" && !item.peer && item.attachment == nil && !item.claimed {
-			// An offline durable lane has no Worker to receive close. Claim its
+			// Only record-side forget can select an offline lane. Claim its
 			// exact row before dropping the mutex so resume or another cleanup
-			// cannot race the row-only operation below.
+			// cannot race the row deletion below.
 			item.claimed = true
-			offlineClose = item
+			offlineForget = item
 		} else {
 			result[0].code = d.routeLocked(item, request.method, *request)
 		}
 	}
 	d.mu.Unlock()
-	if offlineClose != nil {
-		d.finishOfflineClose(offlineClose, *request)
+	if offlineForget != nil {
+		d.finishOfflineForget(offlineForget, *request)
 	}
 	if method == "session.list" {
 		sort.Slice(result, func(left, right int) bool { return result[left].summary.SessionID < result[right].summary.SessionID })
@@ -417,19 +417,15 @@ func (d *directory) selectEntries(groups, labels []string, group, method string,
 	return result, 0
 }
 
-func (d *directory) finishOfflineClose(item *entry, request routedRequest) {
-	forget := request.params.(*protocol.SessionCloseRequest).Forget
-	var err error
-	if forget {
-		err = d.daemon.table.delete(item.row.SessionID)
-	}
+func (d *directory) finishOfflineForget(item *entry, request routedRequest) {
+	err := d.daemon.table.delete(item.row.SessionID)
 
 	completed := false
 	d.mu.Lock()
 	if d.entries[item.row.SessionID] == item && item.attachment == nil && item.claimed {
 		completed = true
 		item.claimed = false
-		if forget && err == nil {
+		if err == nil {
 			delete(d.entries, item.row.SessionID)
 		}
 	}
