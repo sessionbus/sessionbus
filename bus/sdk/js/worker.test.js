@@ -6,6 +6,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
+const { EventEmitter } = require("node:events");
 const { connectPeer, Connection, ProtocolError, Worker } = require("./index.js");
 const { pair, deferred } = require("./test-support.js");
 
@@ -185,6 +186,52 @@ test("peer shutdown closes a held replacement hello", async (t) => {
   const replacing = peer.replace({ product: "native-product", session_id: "new", name: "new", groups: [], info: {} }); await endpoint.next(); peer.shutdown(); await assert.rejects(replacing, /not connected|closed/); await peer.closed; assert.equal(peer.error, null);
 });
 
+test("peer supersession ends without waiting for an end-only socket's reply write", { timeout: 2000 }, async (t) => {
+  const stream = new EventEmitter(), replies = [], scheduled = [], unhandled = [];
+  // Bun's supersession failure emits only end while the reply callback stays
+  // pending. Even an explicit destroy need not synchronously emit close.
+  stream.write = (body, callback) => {
+    const frame = JSON.parse(body);
+    if (Object.hasOwn(frame, "result")) replies.push(callback);
+    else callback();
+    return true;
+  };
+  stream.destroy = () => { stream.destroyed = true; };
+  const onUnhandled = (error) => unhandled.push(error);
+  process.on("unhandledRejection", onUnhandled);
+  const peer = connectPeer({ product: "native-product", session_id: "session", groups: [], info: {} }, async () => ({ disposition: "written" }), { SESSIONBUS_SOCKET: "/fixture/socket" }, { connect: () => stream, schedule: (call) => scheduled.push(call) });
+  t.after(() => {
+    for (const reply of replies) reply();
+    peer.shutdown(); stream.emit("close");
+    process.off("unhandledRejection", onUnhandled);
+  });
+  stream.emit("data", Buffer.from('{"jsonrpc":"2.0","id":1,"result":{}}\n'));
+  await peer.ready;
+  const identitySignal = peer.identityController.signal;
+  const pending = peer.call("session.list", {}).catch((error) => error);
+  let closed = false;
+  peer.closed.then(() => { closed = true; });
+  stream.emit("data", Buffer.from('{"jsonrpc":"2.0","id":1,"method":"session.superseded","params":{}}\n'));
+  stream.emit("end");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(replies.length, 1, "the courtesy reply was attempted but not completed");
+  assert.equal(closed, true, "terminal cleanup must not wait for the reply callback or close event");
+  assert.equal(peer.terminal, true);
+  assert.equal(peer.error instanceof ProtocolError, true);
+  assert.equal(peer.error.code, -32012);
+  assert.equal(identitySignal.aborted, true);
+  assert.equal(identitySignal.reason, peer.error);
+  assert.equal(stream.destroyed, true);
+  assert.match((await pending).message, /closed/);
+  await assert.rejects(peer.call("session.list", {}), /not connected/);
+  assert.equal(scheduled.length, 0);
+  // Node's counterpart is an EPIPE callback. Its rejected courtesy reply is
+  // observed too; neither runtime may leave an unhandled rejection.
+  replies[0](new Error("write EPIPE"));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(unhandled, []);
+});
+
 test("peer rejected hello is terminal", async (t) => {
   const endpoint = peerEndpoint(), scheduled = [];
   const peer = connectPeer({ product: "native-product", session_id: "session", name: "sentence title", groups: [], info: {} }, async () => ({ disposition: "injected" }), { SESSIONBUS_SOCKET: "/fixture/socket", SESSIONBUS_LOCAL_KEY: "" }, { connect: () => endpoint.client, schedule: (call) => scheduled.push(call) });
@@ -317,7 +364,11 @@ async function peerLifetime() {
   holdHello = deferred(); const crossed = peer.rehello(undefined, "crossed title", { phase: "new" }); await holdHello.promise; connections[1].close(); holdHello = null;
   await assert.rejects(crossed, /not connected/); await scheduledReady.promise; scheduledReady = deferred(); scheduled.shift().call(); await peer.ready;
   assert.equal(currentIdentity.name, "crossed title"); assert.deepEqual(currentIdentity.info, { phase: "new" });
-  const beforeTerminal = structuredClone(peer.identity); await connections[2].call("session.superseded", {}); await peer.closed;
+  const beforeTerminal = structuredClone(peer.identity);
+  // The daemon sends this as its final frame and does not wait for an ACK;
+  // immediate client closure may end the fixture's best-effort reply first.
+  await connections[2].call("session.superseded", {}).catch((error) => assert.equal(error.message, "sessionbus connection closed"));
+  await peer.closed;
   assert.equal(peer.error instanceof ProtocolError, true); assert.equal(peer.error.code, -32012);
   await assert.rejects(peer.rehello(undefined, "too late", {}), /superseded/); assert.deepEqual(peer.identity, beforeTerminal); assert.equal(scheduled.length, 0);
   await assert.rejects(peer.replace({ ...beforeTerminal, session_id: "too-late" }), /superseded/); assert.deepEqual(peer.identity, beforeTerminal);

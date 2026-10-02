@@ -250,7 +250,16 @@ class Peer {
   _lost(connection) { if (this.wire !== connection || this.terminal) return; this.wire = null; this.connection = null; this.admitted = null; this.identityController?.abort(connection.signal.reason); this.identityController = null; this.caller.disconnected(); this.schedule(() => { this.ready = this._open(); }, 2000); }
   _failHello(error, connection) { if (!(error instanceof ProtocolError) || error.code !== -32602) return false; this.terminal = true; this.error = error; this.wire = null; this.connection = null; this.identityController?.abort(error); this.identityController = null; this.admitted = null; this.caller.disconnected(); connection.close(); this.finish(); return true; }
   _handle(request, connection) {
-    if (request.method === "session.superseded") { this.terminal = true; this.error = new ProtocolError({ code: -32012, message: "superseded" }); this.connection = null; this.caller.disconnected(); void connection.result(request, {}).finally(() => { this.identityController?.abort(this.error); connection.close(); this.finish(); }); return; }
+    if (request.method === "session.superseded") {
+      this.terminal = true; this.error = new ProtocolError({ code: -32012, message: "superseded" });
+      this.connection = null; this.caller.disconnected();
+      this.identityController?.abort(this.error);
+      // The daemon closes after its final frame without waiting for a reply.
+      // Attempt the courtesy response, but its write cannot hold terminal cleanup.
+      void connection.result(request, {}).catch(() => {});
+      connection.close(); this.finish();
+      return;
+    }
     if (request.method === "message.deliver") { const current = this.connection === connection && this.admitted && this.identityController && !this.identityController.signal.aborted; const admission = current ? { identity: snapshot(this.admitted), signal: this.identityController.signal } : null; void Promise.resolve().then(() => admission ? this.deliver(admission.signal, request.params, admission.identity) : { disposition: "rejected", reason: "closing" }).then((result) => connection.result(request, result), (error) => error instanceof ProtocolError && error.code === -32603 ? connection.error(request, error.code, error.data) : connection.result(request, { disposition: "rejected", reason: clean(error) })).catch(() => connection.close()); }
   }
 }
