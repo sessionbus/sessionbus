@@ -138,6 +138,26 @@ Use returned IDs for subsequent operations:
 5. Close when done. `close` retains the daemon's resume row; `forget` removes
    that row without deleting native history.
 
+Names are not unique; use the returned session ID to choose a specific lane.
+A name matching several active lanes makes send return `ambiguous` and lane
+controls return `unknown_session`. Use `list` with that name to obtain all
+visible matching IDs, including archived rows. Control and list selectors
+retain their existing ID-part grammar; whitespace names are accepted by send.
+
+| Action | What it addresses |
+| --- | --- |
+| send, run/start, status, wait, ack, interrupt, close | Connected sessions/lanes, idle or busy; an archived name or ID is unknown. |
+| list without a name/ID filter, including host-only | Connected sessions/lanes only. |
+| list with a name/ID filter | Visible records in either state; a name returns all matches. |
+| forget | Visible records in either state, by ID or unambiguous name. |
+| resume, trace | The existing exact-ID record paths. |
+
+Same-named sibling lanes under one parent share their composed private group,
+so their direct children see each other and ordinary group-authorized actions
+apply; a group send reaches both connected members. This does not make every
+descendant mutually visible. Lifetime and trace ownership still use exact
+identities; ordinary visibility uses groups.
+
 An `interrupt` acknowledgment is a request acknowledgment, not terminal
 completion. Collect the resulting record; healthy continuation after an
 interruption is subject to the product's documented acceptance scope.
@@ -242,7 +262,10 @@ describes a daemon-managed Run, not whether an interactive native model is busy.
 child's Sessionbus traffic and settled delivery metadata, optionally including
 message bodies. It excludes native prompts/results and Run/lane lifecycle
 events. It is best-effort, defaults off, adds no persistence and requires a
-live parent relationship. Copies follow normal message admission, so they can
+live parent relationship. A send initially addressed to an archived child is
+unknown and gives its parent no target trace copy; selected-active connection
+loss and source-child traces retain their normal behavior. Copies follow normal
+message admission, so they can
 wake an idle attached parent. Turning tracing off stops new admissions;
 already admitted sends may still produce copies. Ended parent lifetimes do not
 receive late copies. Tracing across hosts requires updated hosts and hub.

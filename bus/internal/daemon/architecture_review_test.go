@@ -68,7 +68,7 @@ func TestReviewRejectedRunLeavesIdle(t *testing.T) {
 	}
 }
 
-func TestReviewAbortKeepsReservationThroughCleanup(t *testing.T) {
+func TestReviewAbortKeepsClaimAndIDFenceThroughCleanup(t *testing.T) {
 	d := &Daemon{}
 	d.directory = newDirectory(d, nil)
 	start := newLaunch("worker", false, true)
@@ -81,10 +81,22 @@ func TestReviewAbortKeepsReservationThroughCleanup(t *testing.T) {
 	defer d.group.Done()
 	s := newSession(d)
 	s.launch, s.identity = start, item
-	start.owner = s
+	if claimed, ok := d.directory.claimWorker(s, start.token, "worker"); !ok || claimed != start {
+		t.Fatal("worker did not claim its launch token")
+	}
+	if !d.directory.reserveID(item, "pending@local") {
+		t.Fatal("worker did not reserve its native ID")
+	}
 	s.abortLaunch(answer{code: protocol.SpawnFailed})
-	if d.directory.names[item.row.Name] != item || !item.claimed {
-		t.Fatal("abort released reservation before final cleanup")
+	if d.directory.entries[item.row.SessionID] != item || !item.claimed || start.owner != s {
+		t.Fatal("abort released claim/ID fence before final cleanup")
+	}
+	if d.directory.connected[item.row.SessionID] != nil {
+		t.Fatal("failed Open published an active connection")
+	}
+	d.directory.releaseLaunch(start)
+	if item.claimed || d.directory.entries[item.row.SessionID] != nil || d.directory.tokens[start.token] != nil {
+		t.Fatal("final cleanup retained the failed launch")
 	}
 }
 

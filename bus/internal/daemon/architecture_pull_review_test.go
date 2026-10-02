@@ -43,7 +43,10 @@ func TestReviewMixedMulticastDeduplicatesBeforeDelivery(t *testing.T) {
 	d.host = "alpha"
 	d.federation = &federationLink{inbox: make(chan any, 256), cancel: func() {}}
 	item := &entry{row: row{SessionID: "recipient-id@alpha", Name: "recipient@alpha", Groups: []string{"team"}}, peer: true, attachment: target, done: make(chan struct{})}
+	d.directory.mu.Lock()
 	d.directory.entries[item.row.SessionID] = item
+	d.directory.addConnected(item)
+	d.directory.mu.Unlock()
 	s := pullReviewSender(d)
 	input := &protocol.MessageSendRequest{Targets: []string{"recipient@alpha", "recipient-id@alpha", "away@beta"}, Message: "once"}
 	raw, _ := protocol.EncodeParams("message.send", input)

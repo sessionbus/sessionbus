@@ -38,7 +38,10 @@ func policySession(t *testing.T, persistent bool, delay int64) (*session, *bufio
 	parent := &ownership{id: "owner@local", token: "owner-life"}
 	policy := &protocol.LanePolicy{Persistent: persistent, AutoCloseMS: delay, OwnerSessionID: parent.id}
 	item := &entry{row: row{SessionID: "lane@local", Name: "owner/lane@local", Groups: []string{"team"}, Policy: policy, CreatedAt: clock.now}, parent: parent, attachment: s, done: make(chan struct{})}
+	d.directory.mu.Lock()
 	d.directory.entries[item.row.SessionID] = item
+	d.directory.addConnected(item)
+	d.directory.mu.Unlock()
 	s.identity = item
 	s.committed = true
 	s.launch = &launch{}

@@ -126,7 +126,7 @@ func (s *session) list(frame protocol.Frame, input *protocol.SessionListRequest)
 	if input.SessionID != "" {
 		labels = []string{input.SessionID}
 	}
-	items, code := s.daemon.directory.selectEntries(caller.Groups, labels, "", false, nil, nil)
+	items, code := s.daemon.directory.selectEntries(caller.Groups, labels, "", frame.Method, input, nil, nil)
 	if code == protocol.InvalidFrame {
 		s.reject(frame, code)
 		return
@@ -162,7 +162,7 @@ func (s *session) route(frame protocol.Frame, label string, params any) {
 	}
 	reply := make(chan answer, 1)
 	request := routedRequest{method: frame.Method, params: params, reply: reply}
-	items, code := s.daemon.directory.selectEntries(caller.Groups, []string{label}, "", false, nil, &request)
+	items, code := s.daemon.directory.selectEntries(caller.Groups, []string{label}, "", frame.Method, params, nil, &request)
 	if code == protocol.InvalidFrame {
 		s.reject(frame, code)
 		return
@@ -306,7 +306,7 @@ func (s *session) send(frame protocol.Frame, input *protocol.MessageSendRequest)
 		labels = nil
 	}
 	state := &requestState{frame: frame, messageID: messageID, deliveries: []protocol.MessageSendDelivery{}}
-	items, code := s.daemon.directory.selectEntries(caller.Groups, labels, input.Group, true, s.deliveryOmit(), nil)
+	items, code := s.daemon.directory.selectEntries(caller.Groups, labels, input.Group, frame.Method, input, s.deliveryOmit(), nil)
 	if code == protocol.InvalidFrame {
 		s.reject(frame, code)
 		return

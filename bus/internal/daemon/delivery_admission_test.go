@@ -12,7 +12,7 @@ import (
 	"github.com/antst/sessionbus/bus/sdk/go/protocol"
 )
 
-func TestSendToClosedLaneWasNotSubmitted(t *testing.T) {
+func TestSendToClosedLaneIsUnknown(t *testing.T) {
 	directory := t.TempDir()
 	installFixture(t, directory, "fixture-worker")
 	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -27,7 +27,7 @@ func TestSendToClosedLaneWasNotSubmitted(t *testing.T) {
 		t.Fatalf("deliveries = %#v", sent)
 	}
 	got := sent.Deliveries[0]
-	if got.Disposition != "rejected" || got.Reason != "not_submitted" || got.DeliveryID != "" {
+	if got.Disposition != "rejected" || got.Reason != "unknown_session" || got.DeliveryID != "" {
 		t.Fatalf("closed-lane receipt = %#v", got)
 	}
 	var listed protocol.SessionListResult
