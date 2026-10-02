@@ -144,6 +144,12 @@ controls return `unknown_session`. Use `list` with that name to obtain all
 visible matching IDs, including archived rows. Control and list selectors
 retain their existing ID-part grammar; whitespace names are accepted by send.
 
+**Downgrade:** Once duplicate lane names are stored, v0.5.10 refuses startup
+with `invalid durable session table`. Before downgrading to it, use a daemon
+that supports duplicate names to `forget` surplus lane records by exact ID,
+leaving at most one per name. This deletes their Sessionbus resume records
+without deleting native history.
+
 | Action | What it addresses |
 | --- | --- |
 | send, run/start, status, wait, ack, interrupt, close | Connected sessions/lanes, idle or busy; an archived name or ID is unknown. |
