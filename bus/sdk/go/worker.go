@@ -294,7 +294,12 @@ func (w *Worker) open(ctx context.Context, request *rpc.Request) {
 
 func (w *Worker) interrupt(request *rpc.Request, run *Run, call bool) {
 	if call {
-		callbackError("interrupt", w.nativeInterrupt(run))
+		if err := w.nativeInterrupt(run); err != nil {
+			run.interrupted.Store(false)
+			callbackError("interrupt", err)
+			w.reply(w.conn.Error(request, protocol.Internal, "product interrupt failed"))
+			return
+		}
 	}
 	w.reply(w.conn.Result(request, struct{}{}))
 }

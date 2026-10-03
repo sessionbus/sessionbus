@@ -168,7 +168,11 @@ class Worker {
     else { try { await this.connection.result(request, {}); } catch { this.shutdown(); } }
   }
   async _interrupt(request, run, call) {
-    try { if (call && !run.controller.signal.aborted) await this.callbacks.interrupt(run.controller.signal, run); } catch (error) { callbackError("interrupt", error); }
+    try { if (call && !run.controller.signal.aborted) await this.callbacks.interrupt(run.controller.signal, run); } catch (error) {
+      run.interrupted = false;
+      callbackError("interrupt", error);
+      await this._replyError(request, -32603, "product interrupt failed"); return;
+    }
     try { await this.connection.result(request, {}); } catch { this.shutdown(); }
   }
   async _deliver(request, run) {

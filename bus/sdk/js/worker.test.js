@@ -36,7 +36,7 @@ class FakeProduct {
     if (input === "long") return { outcome: "completed", result: "x".repeat(262145) };
     return { outcome: input === "interrupted" ? "interrupted" : "completed", result: input === "completed" || input === "interrupted" ? "" : input };
   }
-  async interrupt(cancel, run) { this.calls[3]++; assert.equal(run.Interrupted(), true); this.interrupted?.resolve(); if (this.hangInterrupt) await aborted(cancel); if (this.interruptError) throw this.interruptError; }
+  async interrupt(cancel, run) { this.calls[3]++; assert.equal(run.Interrupted(), true); if (this.interruptCall) return this.interruptCall(cancel, run); this.interrupted?.resolve(); if (this.hangInterrupt) await aborted(cancel); if (this.interruptError) throw this.interruptError; }
   async deliver(cancel, _request, _identity, run) {
     this.calls[4]++; if (this.deliverStart) { this.deliverStart.resolve(); await aborted(cancel); throw cancel.reason; }
     if (this.deliverRun) {
@@ -56,6 +56,33 @@ class FakeProduct {
 test("worker idle delivery requires a seed", async (t) => {
   const product = new FakeProduct(); const { daemon } = await harness(t, product);
   await errorCode(daemon.call("message.deliver", delivery), -32004); assert.equal(product.calls[4], 0);
+});
+
+for (const failed of [false, true]) test(`worker interrupt retry after ${failed ? "failure" : "success"}`, async (t) => {
+  const product = new FakeProduct(); product.started = deferred(); product.release = deferred();
+  const entered = deferred(), release = deferred(), stderr = captureStderr(t);
+  t.after(() => { release.resolve(); product.release.resolve(); });
+  const { daemon } = await harness(t, product);
+  const running = daemon.call("turn.run", { ...target, input: "block" }), run = await product.started.promise;
+  product.interruptCall = async (_signal, current) => {
+    assert.equal(current, run);
+    if (product.calls[3] === 1) { entered.resolve(); await release.promise; if (failed) throw new Error("first interrupt failed"); }
+  };
+  const first = daemon.call("turn.interrupt", target).catch((error) => error);
+  await entered.promise;
+  assert.deepEqual(await daemon.call("turn.interrupt", target), {});
+  assert.equal(product.calls[3], 1); assert.equal(run.Interrupted(), true);
+  release.resolve();
+  const result = await first, marked = run.Interrupted();
+  assert.deepEqual(await daemon.call("turn.interrupt", target), {});
+  assert.deepEqual(await daemon.call("turn.interrupt", target), {});
+  const calls = product.calls[3];
+  product.release.resolve(); await running; await run.Done;
+  await errorCode(daemon.call("turn.interrupt", target), -32004);
+  assert.deepEqual({ first: result instanceof ProtocolError ? { code: result.code, data: result.data } : result, marked, calls, endedCalls: product.calls[3], stderr: stderr() }, {
+    first: failed ? { code: -32603, data: "product interrupt failed" } : {}, marked: !failed, calls: failed ? 2 : 1, endedCalls: failed ? 2 : 1,
+    stderr: failed ? 'sessionbus: product interrupt: "first interrupt failed"\n' : "",
+  });
 });
 
 test("worker delivery keeps its admission run across terminal", async (t) => {
@@ -299,7 +326,7 @@ for (const row of rows) test(`lifecycle: ${row.name}`, async (t) => {
       product.started = deferred(); product.release = deferred(); const { daemon } = await harness(t, product); const running = daemon.call("turn.run", { ...target, input: "block" }); const run = await product.started.promise;
       if (row.name === "one-run") await errorCode(daemon.call("turn.run", { ...target, input: "again" }), -32003);
       if (row.name === "one-interrupt") { product.interrupted = deferred(); await Promise.all([daemon.call("turn.interrupt", target), daemon.call("turn.interrupt", target)]); await product.interrupted.promise; }
-      if (row.name === "interrupt-error") { product.interruptError = new Error("first failure\nsecond failure"); const stderr = captureStderr(t); await daemon.call("turn.interrupt", target); assert.equal(stderr(), 'sessionbus: product interrupt: "first failure\\nsecond failure"\n'); }
+      if (row.name === "interrupt-error") { product.interruptError = new Error("first failure\nsecond failure"); const stderr = captureStderr(t); await errorCode(daemon.call("turn.interrupt", target), -32603); assert.equal(stderr(), 'sessionbus: product interrupt: "first failure\\nsecond failure"\n'); }
       if (row.name === "full-duplex" || row.name === "callback-originated-method") { product.outbound = true; assert.equal((await daemon.call("message.deliver", delivery)).disposition, "injected"); }
       if (row.name === "run-done") { let done = false; run.Done.then(() => { done = true; }); await Promise.resolve(); assert.equal(done, false); }
       if (row.name === "close-during-run") {
