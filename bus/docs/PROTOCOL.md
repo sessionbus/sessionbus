@@ -630,7 +630,7 @@ nothing, extends no deadline and creates no retained notification or retry.
 Either a caller sends `turn.interrupt` to the daemon or the daemon forwards it
 to the addressed lane. The request carries only `session_id`.
 
-A successful turn.interrupt RPC records or coalesces the interrupt request for the outstanding run. Its empty result does not certify native acceptance or completion. The worker invokes the native primitive at most once for that run. Native callback errors remain the prescribed quoted diagnostic; only the native run terminal supplies the stopping outcome. Idle remains not_running.
+A successful turn.interrupt RPC records or coalesces the interrupt request for the outstanding run. Its empty result does not certify native acceptance or completion. Concurrent requests during an attempt and later requests after a successful callback return `{}` without another native call. A failed callback clears the captured run's interrupt mark, emits the prescribed quoted diagnostic, and answers its initiating request with `internal` (`-32603`) and string data `product interrupt failed`; a later explicit request may try again. There is no automatic retry, including after partial native effects. Only the native run terminal supplies the stopping outcome. Idle remains not_running.
 
 There is no interrupt grace timer and no `timed_out` outcome: if the native run
 remains unresponsive, the caller closes the session.
@@ -888,7 +888,7 @@ Callback failures map exactly once:
 | --- | --- |
 | `open` | `spawn_failed` with `stderr_tail:[message]`; after the worker exits, the daemon puts its bounded trailing stderr before that tail and, when available, adds the observed nonnegative worker-process exit code if the worker supplied none. |
 | `run` | Callback error or invalid/oversized output becomes retained `unavailable`. Only an observed native terminal supplies completed/failed/interrupted. |
-| `interrupt` | `{}`; the callback message is one quoted line on worker stderr, and the run terminal remains the stopping truth. |
+| `interrupt` | For an explicit `turn.interrupt` attempt, `internal` (`-32603`) with string data `product interrupt failed`; the callback message remains one quoted line on worker stderr. The captured run's mark is cleared for a later explicit request. An interrupt initiated by close retains its quoted diagnostic and close handling. The run terminal remains the stopping truth. |
 | `deliver` | An explicit `ProtocolError` with code `-32603` preserves an uncertain-submission RPC failure; the daemon maps it to `rejected/no_receipt`, which makes no non-consumption claim. Other callback errors become rejected receipts with the callback message as `reason` and must denote observed refusal or failure before submission. |
 | `close` | `{}` followed by ordinary kit exit; the callback message is one quoted line on worker stderr. |
 

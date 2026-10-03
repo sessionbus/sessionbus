@@ -36,6 +36,7 @@ type fakeProduct struct {
 	closeRequest            chan SessionCloseRequest
 	outbound, hangInterrupt bool
 	closeErr, interruptErr  error
+	interruptCall           func(context.Context, *Run) error
 	calls                   [6]int32
 }
 
@@ -91,6 +92,9 @@ func (p *fakeProduct) Interrupt(ctx context.Context, run *Run) error {
 	atomic.AddInt32(&p.calls[3], 1)
 	if !run.Interrupted() {
 		return errors.New("run was not marked interrupted")
+	}
+	if p.interruptCall != nil {
+		return p.interruptCall(ctx, run)
 	}
 	if p.interrupted != nil {
 		close(p.interrupted)
@@ -369,6 +373,75 @@ func TestWorkerLifecycleTable(t *testing.T) {
 	check(t, len(counts) == 2 && counts[interrupt] == 2 && counts[closeLine] == 2, "callback stderr = %q", raw)
 }
 
+func TestWorkerInterruptRetry(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		name := "success"
+		if failed {
+			name = "failure"
+		}
+		t.Run(name, func(t *testing.T) {
+			p := &fakeProduct{started: make(chan *Run), release: make(chan struct{})}
+			h := startHarness(t, p, true, true)
+			running := async(h, "turn.run", protocol.TurnRunRequest{SessionID: target.SessionID, Input: "block"}, &RunStatus{})
+			run := <-p.started
+			entered, release := make(chan struct{}), make(chan struct{})
+			var releaseOnce, finishOnce sync.Once
+			defer releaseOnce.Do(func() { close(release) })
+			defer finishOnce.Do(func() { close(p.release) })
+			p.interruptCall = func(ctx context.Context, current *Run) error {
+				if current != run {
+					t.Error("interrupt changed Run identity")
+				}
+				if atomic.LoadInt32(&p.calls[3]) == 1 {
+					close(entered)
+					select {
+					case <-release:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+					if failed {
+						return errors.New("first interrupt failed")
+					}
+				}
+				return nil
+			}
+			first := async(h, "turn.interrupt", target, &struct{}{})
+			<-entered
+			check(t, h.Call(context.Background(), "turn.interrupt", target, &struct{}{}) == nil, "in-flight duplicate failed")
+			check(t, atomic.LoadInt32(&p.calls[3]) == 1 && run.Interrupted(), "in-flight duplicate called product or lost intent")
+			releaseOnce.Do(func() { close(release) })
+			err := <-first
+			if failed {
+				var failure *protocol.RPCError
+				var detail string
+				if !errors.As(err, &failure) || failure.Code != protocol.Internal || json.Unmarshal(failure.Data, &detail) != nil || detail != "product interrupt failed" {
+					t.Errorf("first interrupt error = %#v, want Internal/string", err)
+				}
+				if run.Interrupted() {
+					t.Error("failed interrupt kept the attempt mark")
+				}
+			} else {
+				check(t, err == nil && run.Interrupted(), "successful interrupt failed or lost its mark: %v", err)
+			}
+			check(t, h.Call(context.Background(), "turn.interrupt", target, &struct{}{}) == nil, "later explicit interrupt failed")
+			check(t, h.Call(context.Background(), "turn.interrupt", target, &struct{}{}) == nil, "successful duplicate failed")
+			want := int32(1)
+			if failed {
+				want = 2
+			}
+			calls := atomic.LoadInt32(&p.calls[3])
+			if calls != want {
+				t.Errorf("product interrupt calls = %d, want %d", calls, want)
+			}
+			finishOnce.Do(func() { close(p.release) })
+			check(t, <-running == nil, "run result failed")
+			<-run.Done()
+			wantCode(t, h.Call(context.Background(), "turn.interrupt", target, &struct{}{}), protocol.NotRunning)
+			check(t, atomic.LoadInt32(&p.calls[3]) == calls, "ended Run invoked product interrupt")
+		})
+	}
+}
+
 func runCase(t *testing.T, name string) [6]int32 {
 	p := &fakeProduct{}
 	switch name {
@@ -493,7 +566,7 @@ func blockingCase(t *testing.T, name string, p *fakeProduct) {
 		check(t, errors.Join(<-first, <-second) == nil, "interrupt response failed")
 	case "interrupt-error":
 		p.interruptErr = errors.New("first failure\nsecond failure")
-		check(t, h.Call(context.Background(), "turn.interrupt", target, &struct{}{}) == nil, "interrupt error reached the wire")
+		wantCode(t, h.Call(context.Background(), "turn.interrupt", target, &struct{}{}), protocol.Internal)
 	case "full-duplex", "callback-originated-method":
 		p.outbound = true
 		checkDelivery(t, h, "injected")
