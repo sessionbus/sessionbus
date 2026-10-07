@@ -804,8 +804,25 @@ rechecks it at publication. Same-ID supersession needs no extra control frame.
 Control queue/write failure closes the link instead of dropping cleanup.
 Destination hub loss ends all remote nonpersistent owners. Persistent lanes
 ignore owner loss and retain their independent auto-close deadlines. This is
-connectivity-lifetime policy, not proof of remote process death; no lease,
-polling, replay or reconnect subsystem is added.
+connectivity-lifetime policy, not proof of remote process death; lifetime
+controls add no lease, polling, replay or reconnect subsystem.
+
+The hub checks a roster-capable host link only on demand. When a short call
+the hub sent to that host has waited 10 s and no frame has arrived from it for
+10 s, the hub sends it one `federation.roster` request; at most one is
+outstanding per link. Short means every forward except `turn.run`,
+`turn.wait`, `lane.spawn` and `session.close`, plus lifetime controls and
+operator roster legs.
+Any inbound frame counts as activity. If no frame arrives for 20 s after the
+later of that request and the last inbound frame while it is unanswered, the
+hub closes the link and normal removal applies: pending forwards end
+`forward_lost`, other hosts receive `federation.host_end`, and the daemon's
+existing redial obtains a fresh attachment; nothing is replayed. An idle link
+receives no check. This is a demand-triggered transport check, not idle
+polling or a renewable lease. The close is a connectivity decision, never proof
+of remote process death, and like any link loss it can end otherwise live
+nonpersistent ownership. It bounds sustained link silence only, not the
+completion time of any call. Hosts without roster capability rely on TCP.
 
 ### 1.5 Error authority
 
