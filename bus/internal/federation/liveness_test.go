@@ -480,6 +480,45 @@ func TestHubAcceptsLateProbeReplyAndProbesAgain(t *testing.T) {
 	}
 }
 
+// The probe outlives the call that triggered it: completing that call renews
+// the deadline like any frame but does not answer the probe, so later silence
+// still closes the link.
+func TestHubClosesSilentLinkAfterTriggeringCallCompletes(t *testing.T) {
+	const stall, timeout = 150 * time.Millisecond, 400 * time.Millisecond
+	address, secrets, log := livenessHub(t, stall, timeout)
+	beta := dialRawPeer(t, address, "beta", secrets["beta"], true)
+	alpha := livenessAlpha(t, address, secrets)
+	waitListed(t, alpha, true)
+	reply := listBeta(t, alpha)
+	forward := beta.expect(t, forwardMethod, time.Second)
+	beta.probe(t, 3*time.Second)
+	time.Sleep(timeout / 2)
+	answered := time.Now()
+	beta.answer(t, forward.ID, emptyList)
+	select {
+	case value := <-reply:
+		if string(value.Result) != `{"sessions":[]}` {
+			t.Fatalf("reply = %#v", value)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("forward did not complete")
+	}
+	if !listed(t, alpha) || log.silentLines("beta") != 0 {
+		t.Fatal("link closed when the call completed")
+	}
+	beta.waitClosed(t, 3*time.Second)
+	if elapsed := time.Since(answered); elapsed < timeout {
+		t.Fatalf("closed %s after the host's last frame", elapsed)
+	}
+	waitListed(t, alpha, false)
+	if probes := beta.rosters.Load(); probes != 1 {
+		t.Fatalf("probes = %d, want the one outstanding probe", probes)
+	}
+	if lines := log.silentLines("beta"); lines != 1 {
+		t.Fatalf("silent log lines = %d", lines)
+	}
+}
+
 func TestHubKeepsSlowHealthyHost(t *testing.T) {
 	const stall, timeout = 150 * time.Millisecond, 250 * time.Millisecond
 	address, secrets, log := livenessHub(t, stall, timeout)

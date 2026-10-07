@@ -813,9 +813,10 @@ the hub sent to that host has waited 10 s and no frame has arrived from it for
 outstanding per link. Short means every forward except `turn.run`,
 `turn.wait`, `lane.spawn` and `session.close`, plus lifetime controls and
 operator roster legs.
-Any inbound frame counts as activity. If no frame arrives for 20 s after the
-later of that request and the last inbound frame while it is unanswered, the
-hub closes the link and normal removal applies: pending forwards end
+Any inbound frame counts as activity, but only its reply answers the request,
+even after the call that triggered it completes. If no frame arrives for 20 s
+after the later of that request and the last inbound frame while it is
+unanswered, the hub closes the link and normal removal applies: pending forwards end
 `forward_lost`, other hosts receive `federation.host_end`, and the daemon's
 existing redial obtains a fresh attachment; nothing is replayed. An idle link
 receives no check. This is a demand-triggered transport check, not idle
