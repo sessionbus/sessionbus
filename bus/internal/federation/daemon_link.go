@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/antst/sessionbus/bus/internal/conn"
 	"github.com/antst/sessionbus/bus/sdk/go/protocol"
@@ -38,6 +39,7 @@ type pendingCall struct {
 	reply  chan Reply
 	trace  bool
 	target string
+	since  time.Time
 }
 
 func ServeDaemon(ctx context.Context, host string, fd net.Conn, inbox chan any, admit func(IncomingCall) (Wait, error), stderr io.Writer, lifetime ...func(LifetimeEvent)) error {
