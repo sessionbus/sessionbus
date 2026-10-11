@@ -54,8 +54,8 @@ type Request struct {
 	Local bool `json:"local"`
 }
 
-// Socket is shorter than the mandatory derived lane socket, and unique for
-// multiple daemon sockets in one runtime directory.
+// Socket returns a unique operator endpoint for each public daemon socket
+// in one runtime directory.
 func Socket(public string) string {
 	sum := sha256.Sum256([]byte(filepath.Base(public)))
 	return filepath.Join(filepath.Dir(public), fmt.Sprintf("op-%x.sock", sum[:16]))

@@ -5,6 +5,7 @@ package bus_test
 import (
 	"bytes"
 	"encoding/json"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
@@ -163,6 +164,63 @@ func TestBusSourceContainsNoProductNames(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDaemonDoesNotReferenceAdapterLaneDirectory(t *testing.T) {
+	for _, root := range []string{"internal/daemon", "cmd/sessionbus"} {
+		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() || filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+				return err
+			}
+			positions := token.NewFileSet()
+			file, err := parser.ParseFile(positions, path, nil, 0)
+			if err != nil {
+				return err
+			}
+			socketpathImports := map[string]bool{}
+			for _, imported := range file.Imports {
+				importPath, err := strconv.Unquote(imported.Path.Value)
+				if err != nil {
+					return err
+				}
+				if importPath == sdkModule+"/socketpath" {
+					name := "socketpath"
+					if imported.Name != nil {
+						name = imported.Name.Name
+					}
+					socketpathImports[name] = true
+				}
+			}
+			ast.Inspect(file, func(node ast.Node) bool {
+				if call, ok := node.(*ast.CallExpr); ok {
+					if selected, ok := call.Fun.(*ast.SelectorExpr); ok {
+						if qualifier, ok := selected.X.(*ast.Ident); ok && socketpathImports[qualifier.Name] && (selected.Sel.Name == "Lane" || selected.Sel.Name == "Prepare") {
+							t.Errorf("%s calls adapter lane-path API %s", positions.Position(call.Pos()), selected.Sel.Name)
+						}
+					}
+				}
+				literal, ok := node.(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					return true
+				}
+				value, err := strconv.Unquote(literal.Value)
+				if err != nil {
+					t.Error(err)
+					return false
+				}
+				for _, segment := range strings.Split(strings.ReplaceAll(value, "\\", "/"), "/") {
+					if segment == "lanes" {
+						t.Errorf("%s references adapter-owned lanes directory", positions.Position(literal.Pos()))
+					}
+				}
+				return true
+			})
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
