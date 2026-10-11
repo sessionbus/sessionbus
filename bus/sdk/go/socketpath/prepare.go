@@ -13,6 +13,12 @@ import (
 
 // Prepare validates and creates the selected Sessionbus runtime directory.
 func Prepare(socket string) error {
+	return PrepareSockets(socket, Lane(socket, ""))
+}
+
+// PrepareSockets validates the supplied socket paths and creates the directory
+// containing socket. Additional paths are checked for length only.
+func PrepareSockets(socket string, additionalPaths ...string) error {
 	root := filepath.Dir(socket)
 	if !filepath.IsAbs(root) {
 		return fmt.Errorf("sessionbus runtime directory %q is not absolute", root)
@@ -21,8 +27,7 @@ func Prepare(socket string) error {
 	if runtime.GOOS == "darwin" {
 		limit = 103
 	}
-	lane := Lane(socket, "")
-	for _, path := range []string{socket, lane} {
+	for _, path := range append([]string{socket}, additionalPaths...) {
 		if len([]byte(path)) > limit {
 			return fmt.Errorf("sessionbus Unix socket path limit %d exceeded by %q", limit, path)
 		}

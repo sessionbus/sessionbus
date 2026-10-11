@@ -7,13 +7,13 @@ import (
 	"errors"
 	"net"
 	"os"
-	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/antst/sessionbus/bus/internal/commslog"
 	"github.com/antst/sessionbus/bus/internal/conn"
+	"github.com/antst/sessionbus/bus/internal/roster"
 	"github.com/antst/sessionbus/bus/sdk/go/socketpath"
 )
 
@@ -103,7 +103,7 @@ func Start(config Config) (*Daemon, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = socketpath.Prepare(config.SocketPath); err != nil {
+	if err = socketpath.PrepareSockets(config.SocketPath, roster.Socket(config.SocketPath)); err != nil {
 		return nil, err
 	}
 	sweepSockets(config.SocketPath)
@@ -140,18 +140,11 @@ func Start(config Config) (*Daemon, error) {
 }
 
 func sweepSockets(socket string) {
-	paths := []string{socket}
-	entries, _ := os.ReadDir(filepath.Join(filepath.Dir(socket), "lanes"))
-	for _, entry := range entries {
-		paths = append(paths, filepath.Join(filepath.Dir(socket), "lanes", entry.Name()))
-	}
-	for _, path := range paths {
-		fd, err := net.Dial("unix", path)
-		if err == nil {
-			_ = fd.Close()
-		} else if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, os.ErrNotExist) {
-			_ = os.Remove(path)
-		}
+	fd, err := net.Dial("unix", socket)
+	if err == nil {
+		_ = fd.Close()
+	} else if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, os.ErrNotExist) {
+		_ = os.Remove(socket)
 	}
 }
 
