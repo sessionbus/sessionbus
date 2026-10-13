@@ -166,6 +166,13 @@ func TestLinuxRecipeRequiresLingeringBeforeServiceActivation(t *testing.T) {
 				write(t, filepath.Join(config, environment), "preserved-environment")
 				unit := filepath.Join(home, ".config/systemd/user", service+".service")
 				write(t, unit, "old-unit")
+				root := filepath.Join(home, ".local/libexec/sessionbus", role)
+				prior := filepath.Join(root, "releases/111111111111")
+				current := filepath.Join(root, "current")
+				write(t, filepath.Join(prior, "keep"), "old-payload")
+				if err := os.Symlink(prior, current); err != nil {
+					t.Fatal(err)
+				}
 				write(t, filepath.Join(fake, "uname"), "#!/bin/sh\nprintf 'Linux\n'\n")
 				write(t, filepath.Join(fake, "id"), "#!/bin/sh\n[ \"$1\" = -un ] || exit 1\nprintf 'linger-test-user\n'\n")
 				write(t, filepath.Join(fake, "systemctl"), `#!/bin/sh
@@ -174,7 +181,11 @@ if [ "$2" = cat ]; then test -f "$HOME/.config/systemd/user/$3"; fi
 `)
 				write(t, filepath.Join(fake, "loginctl"), `#!/bin/sh
 printf 'loginctl %s\n' "$*" >> "$HOME/calls"
-grep -q '^\[Service\]$' "$HOME/.config/systemd/user/$TEST_SERVICE.service" || exit 90
+[ "$(cat "$HOME/.config/systemd/user/$TEST_SERVICE.service")" = old-unit ] || exit 90
+[ "$(readlink "$TEST_CURRENT")" = "$TEST_PRIOR" ] || exit 94
+! grep -q '^systemctl --user stop ' "$HOME/calls" || exit 95
+[ ! -e "$TEST_ROOT/releases/abcdef123456" ] || exit 96
+for stage in "$TEST_ROOT/releases"/.stage.*; do [ ! -e "$stage" ] || exit 97; done
 [ "$1" != --no-ask-password ] || shift
 case "$1" in
  show-user)
@@ -196,7 +207,8 @@ esac
 `)
 				cmd := exec.Command("sh", filepath.Join(src, "install"))
 				cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+filepath.Join(home, ".config"),
-					"PATH="+fake+":"+os.Getenv("PATH"), "TEST_SERVICE="+service, "TEST_LINGER_STATE="+state)
+					"PATH="+fake+":"+os.Getenv("PATH"), "TEST_SERVICE="+service, "TEST_LINGER_STATE="+state,
+					"TEST_ROOT="+root, "TEST_CURRENT="+current, "TEST_PRIOR="+prior)
 				out, installErr := cmd.CombinedOutput()
 				success := state == "yes" || state == "no"
 				if success != (installErr == nil) {
@@ -214,12 +226,20 @@ esac
 				if enabled != wantEnable || strings.Contains(string(calls), "disable-linger") {
 					t.Fatalf("account policy calls = %s", calls)
 				}
+				query := "loginctl show-user linger-test-user -p Linger --value\n"
+				stop := "systemctl --user stop " + service + ".service\n"
+				if strings.Count(string(calls), query) != 1 ||
+					(success && (strings.Count(string(calls), stop) != 1 ||
+						strings.Index(string(calls), query) > strings.Index(string(calls), stop))) ||
+					(!success && strings.Contains(string(calls), stop)) {
+					t.Fatalf("policy must be checked before stopping old service: %s", calls)
+				}
 				start := "systemctl --user start " + service + ".service\n"
 				if success != strings.Contains(string(calls), start) {
 					t.Fatalf("service activation after policy check: %s", calls)
 				}
 				if state == "no" && (!strings.Contains(string(out), "all user services of the account") ||
-					strings.Index(string(calls), "enable-linger") > strings.Index(string(calls), start)) {
+					strings.Index(string(calls), "enable-linger") > strings.Index(string(calls), stop)) {
 					t.Fatalf("missing notice or wrong ordering: %s\n%s", out, calls)
 				}
 				if !success && (!strings.Contains(string(out), "administrator") ||
@@ -230,11 +250,26 @@ esac
 				for name, want := range map[string]string{key: "preserved-key", environment: "preserved-environment"} {
 					content, err := os.ReadFile(filepath.Join(config, name))
 					if err != nil || string(content) != want {
-						t.Fatalf("existing %s lost on success or partial failure: %q, %v", name, content, err)
+						t.Fatalf("existing %s lost on success or policy refusal: %q, %v", name, content, err)
 					}
 				}
-				if unit, err := os.ReadFile(unit); err != nil || !strings.Contains(string(unit), "\n[Service]\n") {
-					t.Fatalf("unit was not installed before policy check: %s, %v", unit, err)
+				unitBytes, err := os.ReadFile(unit)
+				if err != nil || (success && !strings.Contains(string(unitBytes), "\n[Service]\n")) ||
+					(!success && string(unitBytes) != "old-unit") {
+					t.Fatalf("unit state after policy decision: %s, %v", unitBytes, err)
+				}
+				wantCurrent := prior
+				if success {
+					wantCurrent = filepath.Join(root, "releases/abcdef123456")
+				}
+				if target, err := os.Readlink(current); err != nil || target != wantCurrent {
+					t.Fatalf("current release after policy decision: %q, %v", target, err)
+				}
+				if !success {
+					entries, err := os.ReadDir(filepath.Join(root, "releases"))
+					if err != nil || len(entries) != 1 || entries[0].Name() != "111111111111" {
+						t.Fatalf("policy refusal changed release storage: %v, %v", entries, err)
+					}
 				}
 			})
 		}
