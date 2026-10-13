@@ -113,7 +113,11 @@ curl -fsSL https://raw.githubusercontent.com/sessionbus/sessionbus/main/deploy/i
 Linux and macOS, amd64 and arm64 are supported. Run as your normal login user;
 no sudo, Go, npm, or checkout is required. The scripts verify release SHA256
 checksums and install under `~/.local`, using systemd user services on Linux or
-launchd on macOS. Linux needs a working user service manager. Only the selected
+launchd on macOS. Linux needs a working user service manager. On Linux, the
+installers enable account lingering so user services run at boot and survive
+logout; this affects all account services, remains enabled on uninstall, and
+installation stops if the system refuses it. On macOS, these are per-user agents
+that run from login, without a boot-time system service. Only the selected
 role is restarted. Add `~/.local/bin` to your login PATH if prompted. Existing
 configuration, keys, state and the other role are preserved. An earlier real
 `current` directory is retained under `releases/prior.*/current` when migrating

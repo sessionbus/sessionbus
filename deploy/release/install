@@ -108,6 +108,22 @@ RestartSec=2
 WantedBy=default.target
 EOF
  fi
+ install_user=$(id -un)
+ user_linger=$(loginctl show-user "$install_user" -p Linger --value) || user_linger=unknown
+ case "$user_linger" in
+  yes) ;;
+  no)
+   if ! loginctl --no-ask-password enable-linger "$install_user"; then
+    printf 'Cannot enable user lingering. Ask an administrator to run: loginctl enable-linger %s\n' "$install_user" >&2
+    exit 1
+   fi
+   printf 'Enabled lingering for %s; this applies to all user services of the account.\n' "$install_user"
+   ;;
+  *)
+   printf 'Cannot verify user lingering. Ask an administrator to run: loginctl enable-linger %s\n' "$install_user" >&2
+   exit 1
+   ;;
+ esac
  systemctl --user daemon-reload
  systemctl --user enable "$service.service"
  systemctl --user start "$service.service"
