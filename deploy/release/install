@@ -13,7 +13,25 @@ root="$prefix/libexec/sessionbus/$role"
 case "$HOME$config" in *'%'*|*'"'*|*'\'*|*'&'*|*'<'*|*'>'*|*'|'*|*'$'*|*'`'*|*'
 '*) echo 'Unsupported character in installation path' >&2; exit 1;; esac
 case "$(uname -s)" in
- Linux) systemctl --user show-environment >/dev/null; service="sessionbus"; [ "$role" != hub ] || service=sessionbus-hub;;
+ Linux)
+ systemctl --user show-environment >/dev/null
+ install_user=$(id -un)
+ user_linger=$(loginctl show-user "$install_user" -p Linger --value) || user_linger=unknown
+ case "$user_linger" in
+  yes) ;;
+  no)
+   if ! loginctl --no-ask-password enable-linger "$install_user"; then
+    printf 'Cannot enable user lingering. Ask an administrator to run: loginctl enable-linger %s\n' "$install_user" >&2
+    exit 1
+   fi
+   printf 'Enabled lingering for %s; this applies to all user services of the account.\n' "$install_user"
+   ;;
+  *)
+   printf 'Cannot verify user lingering. Ask an administrator to run: loginctl enable-linger %s\n' "$install_user" >&2
+   exit 1
+   ;;
+ esac
+ service="sessionbus"; [ "$role" != hub ] || service=sessionbus-hub;;
  Darwin) service=net.antst.sessionbus; [ "$role" != hub ] || service=net.antst.sessionbus-hub; launchctl print "gui/$(id -u)" >/dev/null;;
  *) echo 'Unsupported OS' >&2; exit 1;;
 esac
