@@ -603,7 +603,7 @@ snapshot to become terminal. An explicit timeout may return running; omission
 waits without a local polling limit. Both return `{session_id,run_id,state}`:
 `running` has no result, `done` includes the native terminal `result`, and
 `unavailable` includes a nonempty `reason` without a fabricated native terminal.
-A missing or retired record is `unknown_session` while disconnected lanes use
+A missing or retired record or initially disconnected lane is `unknown_session`; loss after active selection uses
 `not_connected`. At most 256 active reads are admitted, independently of the
 existing transport correlation bound. Capacity is reserved before new work and
 older output is never silently evicted. A full 256-record cursor rejects new
