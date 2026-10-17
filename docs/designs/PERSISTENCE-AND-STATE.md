@@ -54,6 +54,10 @@ session.
 Messages and turns are synchronous pass-through operations. Success is the recipient or product
 acknowledgement. There is no mailbox, durable receipt, replay journal, or retry owner in the daemon.
 Federation retains only accepted unacknowledged work and rosters in process memory.
+The hub closes a roster-capable host link that stays silent while a short call to it waits (any call
+except `turn.run`, `turn.wait`, `lane.spawn` and `session.close`): one `federation.roster` check after
+10 s, close if no frame arrives within 20 s after the later of that check and the host's last inbound
+frame. Idle links are never checked; hosts without roster capability rely on TCP.
 
 After daemon replacement, daemon-owned lanes are non-live. Their product sessions remain available
 through candidate filtering, product confirmation, and exact native resume. A client that owns its

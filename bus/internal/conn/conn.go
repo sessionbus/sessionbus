@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/antst/sessionbus/bus/sdk/go/protocol"
@@ -31,10 +32,12 @@ type Conn struct {
 	outbox    chan []byte
 	done      chan struct{}
 	finishing bool
+	started   time.Time
+	lastRead  atomic.Int64
 }
 
 func Start(fd net.Conn, inbox chan any, group *sync.WaitGroup) *Conn {
-	c := &Conn{fd: fd, inbox: inbox, outbox: make(chan []byte, OutboxSize), done: make(chan struct{})}
+	c := &Conn{fd: fd, inbox: inbox, outbox: make(chan []byte, OutboxSize), done: make(chan struct{}), started: time.Now()}
 	group.Add(2)
 	go func() { defer group.Done(); c.read() }()
 	go func() { defer group.Done(); c.write() }()
@@ -42,6 +45,13 @@ func Start(fd net.Conn, inbox chan any, group *sync.WaitGroup) *Conn {
 }
 
 func (c *Conn) Done() <-chan struct{} { return c.done }
+
+// LastRead is when the reader last completed an inbound frame, before the
+// frame waits for the owner loop; it is the start time if none was read.
+func (c *Conn) LastRead() time.Time {
+	return c.started.Add(time.Duration(c.lastRead.Load()))
+}
+
 func (c *Conn) Post(event any) bool {
 	select {
 	case <-c.done:
@@ -119,6 +129,7 @@ func (c *Conn) read() {
 			c.inbox <- Closed{Connection: c, Cause: err}
 			return
 		}
+		c.lastRead.Store(int64(time.Since(c.started)))
 		value, decodeErr := protocol.DecodeFrame(body[:len(body)-1])
 		c.inbox <- Frame{Value: value, Err: decodeErr}
 	}

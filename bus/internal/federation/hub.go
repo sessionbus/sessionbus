@@ -72,6 +72,8 @@ type hostLink struct {
 	done        chan struct{}
 	group       sync.WaitGroup
 	log         io.Writer
+	probeID     int64
+	probeSent   time.Time
 }
 
 type hubState struct {
@@ -218,6 +220,17 @@ func (s *hubState) handle(ctx context.Context, inbox chan<- registryEvent, event
 
 const hubHandshakeTimeout = 5 * time.Second
 
+// A roster-capable host link is checked only while a short forwarded call
+// waits on it: after linkStallAfter of inbound silence the hub sends one
+// federation.roster probe, and closes the link if nothing arrives for
+// linkProbeTimeout after the later of that probe and the last inbound frame.
+// Variables only so tests can shrink them; each link copies them at start.
+var (
+	linkStallAfter    = 10 * time.Second
+	linkProbeTimeout  = 20 * time.Second
+	linkCheckInterval = time.Second
+)
+
 func authenticate(ctx context.Context, raw net.Conn, configuration *tls.Config, registry chan<- registryEvent, log io.Writer) {
 	fd := tls.Server(raw, configuration)
 	handshakeCtx, cancelHandshake := context.WithTimeout(ctx, hubHandshakeTimeout)
@@ -272,11 +285,37 @@ func (l *hostLink) run(accepted bool) {
 	failed, nextID, lastIn := !accepted, int64(0), int64(0)
 	stopping := l.ctx.Done()
 	pending := map[int64]pendingCall{}
+	stallAfter, probeTimeout, checkEvery := linkStallAfter, linkProbeTimeout, linkCheckInterval
+	var check <-chan time.Time
+	if accepted && SupportsRoster(l.fd) {
+		ticker := time.NewTicker(checkEvery)
+		defer ticker.Stop()
+		check = ticker.C
+	}
 	for {
 		select {
 		case <-stopping:
 			l.wire.Close()
 			failed, stopping = true, nil
+		case <-check:
+			if failed {
+				continue
+			}
+			now, last := time.Now(), l.wire.LastRead()
+			if l.probeID == 0 && now.Sub(last) >= stallAfter && stalledShortCall(pending, now, stallAfter) {
+				nextID++
+				body, err := requestBytes(nextID, rosterMethod, struct{}{})
+				if err != nil || !l.wire.Send(body) {
+					failed = true
+					l.wire.Close()
+					continue
+				}
+				l.probeID, l.probeSent = nextID, now
+			} else if l.probeID != 0 && now.Sub(later(l.probeSent, last)) >= probeTimeout {
+				fmt.Fprintf(l.log, "federation host %q silent for %s; closing link\n", l.host, now.Sub(last).Round(time.Millisecond))
+				failed = true
+				l.wire.Close()
+			}
 		case raw := <-l.inbox:
 			switch event := raw.(type) {
 			case outgoingRoster:
@@ -290,7 +329,7 @@ func (l *hostLink) run(accepted bool) {
 					event.reply <- errorReply(protocol.ForwardLost, nil)
 					continue
 				}
-				pending[nextID] = pendingCall{method: rosterMethod, reply: event.reply}
+				pending[nextID] = pendingCall{method: rosterMethod, reply: event.reply, since: time.Now()}
 			case lifetimeCall:
 				if failed || len(pending) >= maxPendingForwardedPerHost {
 					event.Reply <- errorReply(protocol.ForwardLost, nil)
@@ -306,7 +345,7 @@ func (l *hostLink) run(accepted bool) {
 					failed = true
 					continue
 				}
-				pending[nextID] = pendingCall{method: event.Method, reply: event.Reply}
+				pending[nextID] = pendingCall{method: event.Method, reply: event.Reply, since: time.Now()}
 			case outgoingForward:
 				request := event.value.Request
 				if request.Completion && !SupportsWake(l.fd) {
@@ -342,7 +381,7 @@ func (l *hostLink) run(accepted bool) {
 					failed = true
 					continue
 				}
-				pending[nextID] = pendingCall{method: request.Method, reply: event.reply, trace: request.Trace, target: target}
+				pending[nextID] = pendingCall{method: request.Method, reply: event.reply, trace: request.Trace, target: target, since: time.Now()}
 			case originReply:
 				body, err := responseBytes(event.id, event.value, true)
 				if !failed && (err != nil || !l.wire.Send(body)) {
@@ -373,6 +412,27 @@ func (l *hostLink) run(accepted bool) {
 	}
 }
 
+// Long-holding forwards may legitimately wait; every other call is short.
+func stalledShortCall(pending map[int64]pendingCall, now time.Time, stallAfter time.Duration) bool {
+	for _, call := range pending {
+		switch call.method {
+		case "turn.run", "turn.wait", "lane.spawn", "session.close":
+			continue
+		}
+		if now.Sub(call.since) >= stallAfter {
+			return true
+		}
+	}
+	return false
+}
+
+func later(first, second time.Time) time.Time {
+	if first.After(second) {
+		return first
+	}
+	return second
+}
+
 func (l *hostLink) settleQueued() {
 	for {
 		select {
@@ -397,6 +457,15 @@ func (l *hostLink) frame(event conn.Frame, pending map[int64]pendingCall, lastIn
 		return event.Err
 	}
 	if !frame.Request {
+		// The liveness probe is correlated outside pending, so it never uses
+		// forwarded-call capacity; only its validated reply clears it.
+		if l.probeID != 0 && frame.ID == l.probeID {
+			if _, valid := decodePendingReply(pendingCall{method: rosterMethod}, frame); !valid {
+				return errFrame
+			}
+			l.probeID = 0
+			return nil
+		}
 		call, ok := pending[frame.ID]
 		if !ok {
 			return errFrame

@@ -44,6 +44,16 @@ aggregate bound, an eight-operation per-origin limit, and bounded destination
 correlation. All connected, authenticated hosts share this diagnostic trust;
 this is operator metadata, not an additional messaging permission.
 
+The hub also sends the same private request for a second purpose: a link-local
+check of a roster-capable host while a short call to it waits (see
+the protocol's federation lifetime controls). That check uses no origin
+operator slot and no per-origin operation, keeps at most one request
+outstanding per link, and follows its own rule: after 10 s of waiting and
+inbound silence it is sent, and if no frame arrives within 20 s after the later
+of that request and the host's last inbound frame, the hub closes the link. Any
+reply, including an error, proves the link answered and clears the check;
+responses remain snapshots either way.
+
 Local and remote snapshots are observations at different instants. Loss,
 unsupported capability, excessive size, or timeout produces explicit incomplete
 status and a nonzero CLI exit. `--local` allows local inspection independently

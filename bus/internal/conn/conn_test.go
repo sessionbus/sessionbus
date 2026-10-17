@@ -182,3 +182,65 @@ func TestOversizeFrameHardCloses(t *testing.T) {
 	group.Wait()
 	_ = peer.Close()
 }
+
+func TestLastReadAdvancesBeforeOwnerReceives(t *testing.T) {
+	local, peer := net.Pipe()
+	inbox := make(chan any)
+	var group sync.WaitGroup
+	c := Start(local, inbox, &group)
+	t.Cleanup(func() {
+		_ = local.Close()
+		_ = peer.Close()
+		joined := make(chan struct{})
+		go func() { group.Wait(); close(joined) }()
+		bound := time.After(time.Second)
+		for {
+			select {
+			case <-inbox:
+			case <-joined:
+				return
+			case <-bound:
+				t.Error("connection goroutines did not stop")
+				return
+			}
+		}
+	})
+	started := c.LastRead()
+	time.Sleep(10 * time.Millisecond)
+	body, _ := protocol.RequestBytes(1, "session.list", protocol.SessionListRequest{})
+	written := make(chan struct{})
+	go func() { _, _ = peer.Write(body); close(written) }()
+	select {
+	case <-written:
+	case <-time.After(time.Second):
+		t.Fatal("reader did not take the frame")
+	}
+	// Nobody has received from the unbuffered inbox yet.
+	deadline := time.Now().Add(time.Second)
+	for !c.LastRead().After(started) {
+		if time.Now().After(deadline) {
+			t.Fatal("queued frame did not advance LastRead")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := c.LastRead().Sub(started); got < 10*time.Millisecond {
+		t.Fatalf("LastRead advanced by %s, want the frame arrival time", got)
+	}
+	select {
+	case event := <-inbox:
+		if frame, ok := event.(Frame); !ok || frame.Value.ID != 1 {
+			t.Fatalf("event = %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("frame was not posted")
+	}
+	c.Close()
+	select {
+	case event := <-inbox:
+		if closed, ok := event.(Closed); !ok || closed.Connection != c {
+			t.Fatalf("closed = %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("close was not posted")
+	}
+}
