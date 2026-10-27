@@ -21,10 +21,13 @@ import (
 )
 
 type federationLink struct {
-	roster bool
-	inbox  chan any
-	cancel context.CancelFunc
-	done   chan struct{}
+	transfer     bool
+	transferBulk chan federation.TransferCall
+	bridge       *transferBridge
+	roster       bool
+	inbox        chan any
+	cancel       context.CancelFunc
+	done         chan struct{}
 }
 
 func (d *Daemon) StartFederation(ctx context.Context, fd net.Conn, stderr io.Writer) error {
@@ -34,7 +37,7 @@ func (d *Daemon) StartFederation(ctx context.Context, fd net.Conn, stderr io.Wri
 
 func (d *Daemon) startFederation(ctx context.Context, fd net.Conn, stderr io.Writer) (*federationLink, error) {
 	linkCtx, cancel := context.WithCancel(ctx)
-	link := &federationLink{inbox: make(chan any, conn.OutboxSize), cancel: cancel, roster: federation.SupportsRoster(fd), done: make(chan struct{})}
+	link := &federationLink{transfer: federation.SupportsTransfer(fd), transferBulk: make(chan federation.TransferCall, 4), inbox: make(chan any, conn.OutboxSize), cancel: cancel, roster: federation.SupportsRoster(fd), done: make(chan struct{})}
 	d.directory.mu.Lock()
 	if d.federation != nil || d.directory.closing || linkCtx.Err() != nil {
 		d.directory.mu.Unlock()
@@ -42,6 +45,7 @@ func (d *Daemon) startFederation(ctx context.Context, fd net.Conn, stderr io.Wri
 		_ = fd.Close()
 		return nil, errors.New("federation link already connected or closing")
 	}
+	link.bridge = newTransferBridge(d, link, linkCtx)
 	d.federation = link
 	d.group.Add(1)
 	d.directory.mu.Unlock()
@@ -52,7 +56,7 @@ func (d *Daemon) startFederation(ctx context.Context, fd net.Conn, stderr io.Wri
 	go func() {
 		defer d.group.Done()
 		defer close(link.done)
-		_ = federation.ServeDaemon(linkCtx, d.host, fd, link.inbox, admit, stderr, d.directory.remoteEnded)
+		_ = federation.ServeDaemonWithTransfers(linkCtx, d.host, fd, link.inbox, admit, stderr, federation.TransferServices{Server: link.bridge.server, Bulk: link.transferBulk, Gate: link.bridge.destinationGate}, d.directory.remoteEnded)
 		cancel()
 		d.directory.remoteEnded(federation.LifetimeEvent{})
 		d.directory.mu.Lock()
@@ -139,6 +143,8 @@ func settleFederationQueue(inbox chan any) {
 		case value := <-inbox:
 			lost := federation.Reply{Error: &protocol.RPCError{Code: protocol.ForwardLost, Message: "forward_lost"}}
 			switch call := value.(type) {
+			case federation.TransferCall:
+				call.Reply <- lost
 			case federation.OutgoingCall:
 				call.Reply <- lost
 			case federation.OwnerEndCall:

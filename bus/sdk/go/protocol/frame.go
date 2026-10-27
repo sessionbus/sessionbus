@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"math"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -50,6 +51,9 @@ func DecodeFrame(body []byte) (frame Frame, err error) {
 		if null(wire.Method) || null(wire.Params) || len(wire.Result) != 0 || len(wire.Error) != 0 || json.Unmarshal(wire.Method, &frame.Method) != nil || frame.Method == "" {
 			return frame, errInvalid
 		}
+		if !TransferFrameFits(frame.Method, len(body)+1) {
+			return frame, errInvalid
+		}
 		frame.Params = wire.Params
 		return frame, nil
 	}
@@ -66,7 +70,11 @@ func DecodeFrame(body []byte) (frame Frame, err error) {
 }
 
 func EncodeRequest(id int64, method string, params []byte) ([]byte, error) {
-	return encodeFrame(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": json.RawMessage(params)})
+	body, err := encodeFrame(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": json.RawMessage(params)})
+	if err == nil && !TransferFrameFits(method, len(body)) {
+		err = errInvalid
+	}
+	return body, err
 }
 func RequestBytes(id int64, method string, value any) ([]byte, error) {
 	raw, err := EncodeParams(method, value)
@@ -80,7 +88,11 @@ func ResultBytes(id int64, method string, value any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return encodeFrame(map[string]any{"jsonrpc": "2.0", "id": id, "result": json.RawMessage(raw)})
+	body, err := encodeFrame(map[string]any{"jsonrpc": "2.0", "id": id, "result": json.RawMessage(raw)})
+	if err == nil && !TransferFrameFits(strings.TrimSuffix(method, ".chunk")+".result", len(body)) {
+		err = errInvalid
+	}
+	return body, err
 }
 func ErrorBytes(id int64, code int, data any) ([]byte, error) {
 	var raw json.RawMessage
@@ -122,3 +134,15 @@ func numericID(raw []byte) (int64, bool) {
 	return int64(value), value >= 1 && value <= MaxRequestID && math.Trunc(value) == value
 }
 func null(raw []byte) bool { return bytes.Equal(bytes.TrimSpace(raw), []byte("null")) }
+
+// TransferFrameFits leaves ordinary frame behavior unchanged. A chunk reply is
+// metadata and uses the smaller bound at ResultBytes, never another data chunk.
+func TransferFrameFits(method string, bytes int) bool {
+	if !strings.HasPrefix(method, "transfer.") {
+		return bytes <= MaxFrameBytes
+	}
+	if method == "transfer.chunk" {
+		return bytes <= MaxTransferFrameBytes
+	}
+	return bytes <= MaxTransferMetadataBytes
+}

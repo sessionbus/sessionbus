@@ -403,6 +403,17 @@ Cancellation stops only that wait and preserves the run/result handle for a
 later status or wait call. It does not interrupt the native run. Existing Go
 `Wait(request)` remains available without cancellation.
 
+Negotiated file transfers use the same connection. Go and JavaScript SDKs use
+one direct filesystem implementation by default, as the current OS user in every
+product and mode. Products bind source/destination paths locally; there is no
+native permission mapping or extra inbox/outbox copy. Offer/request opens nothing
+until acceptance. The receiver uses one sibling temporary file and atomic
+publication, with no overwrite unless explicitly requested; inter-host bytes
+travel only through the hub. Go raw owners use `NewConnectionTransfers(nil)` and
+JavaScript raw owners use `new Transfers()` with the existing generation hooks.
+See [the negotiated protocol](bus/docs/PROTOCOL.md#16-negotiated-endpoint-local-file-transfers)
+and [JavaScript executor API](bus/sdk/js/TYPES.md#endpoint-local-transfers).
+
 List replies include `self_info` with the bound caller's canonical `session_id`,
 optional `name`, `product`, and `groups`, even when filters select other sessions
 or hosts. Compare `self_info.session_id` with row IDs to identify self. Go exposes

@@ -77,7 +77,7 @@ func TestPinnedTLS(t *testing.T) {
 	if clientState.Version != tls.VersionTLS13 || serverState.Version != tls.VersionTLS13 {
 		t.Fatalf("versions = %x, %x", clientState.Version, serverState.Version)
 	}
-	if clientState.NegotiatedProtocol != WakeALPN || serverState.NegotiatedProtocol != WakeALPN {
+	if clientState.NegotiatedProtocol != TransferALPN || serverState.NegotiatedProtocol != TransferALPN {
 		t.Fatalf("protocols = %q, %q", clientState.NegotiatedProtocol, serverState.NegotiatedProtocol)
 	}
 }

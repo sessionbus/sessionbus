@@ -42,7 +42,7 @@ func ClientTLS(host, secret string) (*tls.Config, error) {
 		return nil, err
 	}
 	return &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
-		NextProtos: []string{WakeALPN, TraceALPN, RosterALPN}, ServerName: host, InsecureSkipVerify: true, Certificates: []tls.Certificate{certificate},
+		NextProtos: []string{TransferALPN, WakeALPN, TraceALPN, RosterALPN}, ServerName: host, InsecureSkipVerify: true, Certificates: []tls.Certificate{certificate},
 		VerifyConnection: pin(hubKey.Public().(ed25519.PublicKey))}, nil
 }
 
@@ -68,7 +68,7 @@ func ServerTLS(secrets map[string]string) (*tls.Config, error) {
 			return nil, err
 		}
 		byHost[host] = &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
-			NextProtos: []string{WakeALPN, TraceALPN, RosterALPN}, Certificates: []tls.Certificate{certificate}, ClientAuth: tls.RequireAnyClientCert,
+			NextProtos: []string{TransferALPN, WakeALPN, TraceALPN, RosterALPN}, Certificates: []tls.Certificate{certificate}, ClientAuth: tls.RequireAnyClientCert,
 			VerifyConnection: pin(hostKey.Public().(ed25519.PublicKey))}
 	}
 	return &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,

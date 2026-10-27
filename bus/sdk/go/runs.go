@@ -4,6 +4,7 @@ package sessionkit
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +24,7 @@ func runSequence(id string) (string, uint64, bool) {
 	return prefix, sequence, ok && prefix != "" && sequence > 0 && err == nil && strconv.FormatUint(sequence, 10) == tail
 }
 
-func (w *Worker) execute(request *rpc.Request, delivery *DeliveryRequest) {
+func (w *Worker) execute(request *rpc.Request, delivery *DeliveryRequest, project ...func(context.Context, *DeliveryRequest) error) {
 	w.mu.Lock()
 	if !w.opened.Load() {
 		w.mu.Unlock()
@@ -77,12 +78,22 @@ func (w *Worker) execute(request *rpc.Request, delivery *DeliveryRequest) {
 				return
 			}
 		}
-		w.runTurn(slot, record, seed)
+		var before error
+		if delivery != nil && len(project) > 0 && project[0] != nil {
+			before = project[0](slot.context, seed.Delivery)
+		}
+		w.runTurn(slot, record, seed, before)
 	}()
 }
 
-func (w *Worker) runTurn(slot *Run, record *workerRecord, seed RunInput) {
-	result, err := w.product.Run(slot.context, slot, seed)
+func (w *Worker) runTurn(slot *Run, record *workerRecord, seed RunInput, before ...error) {
+	var result TurnResult
+	var err error
+	if len(before) > 0 && before[0] != nil {
+		err = errors.New("transfer notice projection unavailable")
+	} else {
+		result, err = w.product.Run(slot.context, slot, seed)
+	}
 	slot.cancel()
 	status := record.status
 	status.State, status.Result = "done", &result

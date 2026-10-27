@@ -113,6 +113,17 @@ func TestClosedTypesMatchSchemaFixtures(t *testing.T) {
 
 func validateClosedFixture(definition string, raw []byte) error {
 	params := map[string]string{
+		"TransferOffer":   "transfer.offer",
+		"TransferRequest": "transfer.request",
+		"TransferTarget":  "transfer.status",
+		"TransferAccept":  "transfer.accept",
+		"TransferPrepare": "transfer.prepare",
+		"TransferStart":   "transfer.start",
+		"TransferChunk":   "transfer.chunk",
+		"TransferFinish":  "transfer.finish",
+		"TransferFailure": "transfer.fail",
+		"TransferNotice":  "transfer.notice",
+
 		"SessionHelloRequest": "session.hello", "SessionSupersededRequest": "session.superseded", "SessionListRequest": "session.list",
 		"MessageSendRequest": "message.send", "MessageDeliverRequest": "message.deliver", "LaneDescribeRequest": "lane.describe",
 		"LaneSpawnRequest": "lane.spawn", "TraceConfigureRequest": "trace.configure", "SessionOpenRequest": "session.open", "TurnRunRequest": "turn.run",
@@ -120,6 +131,12 @@ func validateClosedFixture(definition string, raw []byte) error {
 		"RunRef": "turn.ack", "ReadRequest": "turn.status", "WaitRequest": "turn.wait", "ExecuteRequest": "turn.execute", "TurnReady": "turn.ready",
 	}
 	results := map[string]string{
+		"TransferDescriptor": "transfer.offer",
+		"TransferPrepared":   "transfer.prepare",
+		"TransferStarted":    "transfer.start",
+		"TransferCredit":     "transfer.chunk",
+		"TransferTerminal":   "transfer.finish",
+
 		"SessionHelloResult": "session.hello", "SessionSupersededResult": "session.superseded", "SessionListResult": "session.list",
 		"MessageSendResult": "message.send", "MessageDeliverResult": "message.deliver", "DeliveryReceipt": "message.deliver",
 		"LaneDescribeResult": "lane.describe", "LaneSpawnResult": "lane.spawn", "TraceConfigureResult": "trace.configure", "SessionOpenResult": "session.open",
@@ -191,6 +208,7 @@ func TestSchemaDefinitions(t *testing.T) {
 	}
 	want := []string{"DeliveryReceipt", "DeliverySource", "ExtraArgument", "HostProducts", "LaneDescribeRequest", "LaneDescribeResult", "LaneSpawnRequest", "LaneSpawnResult", "MessageDeliverRequest", "MessageDeliverResult", "MessageSendDelivery", "MessageSendRequest", "MessageSendResult", "RPCError", "RPCErrorResponse", "SessionCloseRequest", "SessionCloseResult", "SessionHelloRequest", "SessionHelloResult", "SessionListRequest", "SessionListResult", "SessionOpenOptions", "SessionOpenRequest", "SessionOpenResult", "SessionSummary", "SessionSupersededRequest", "SessionSupersededResult", "SpawnFailedData", "TurnInterruptRequest", "TurnInterruptResult", "TurnRunRequest", "TurnRunResult"}
 	want = append(want, "ExecuteRequest", "LanePolicy", "ReadRequest", "RunRef", "RunStatus", "TurnReady", "WaitRequest", "SessionSelfInfo", "TraceConfigureRequest", "TraceConfigureResult")
+	want = append(want, "TransferOffer", "TransferRequest", "TransferTarget", "TransferAccept", "TransferDescriptor", "TransferPrepare", "TransferPrepared", "TransferStart", "TransferStarted", "TransferChunk", "TransferCredit", "TransferFinish", "TransferFailure", "TransferTerminal", "TransferNotice")
 	slicesSort(want)
 	got := make([]string, 0, len(root.Definitions))
 	for name := range root.Definitions {

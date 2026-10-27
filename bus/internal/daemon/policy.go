@@ -177,8 +177,18 @@ func (s *session) turnReady(frame protocol.Frame, value *protocol.TurnReady) {
 	s.runFromCompletion = false
 	s.daemon.directory.finishRun(s.identity, s)
 	policy := s.identity.row.Policy
-	if value.State == "done" && policy.AutoCloseMS > 0 && s.closeCall == nil {
-		s.setDeadline(s.daemon.config.now().Add(time.Duration(policy.AutoCloseMS) * time.Millisecond))
+	if value.State == "done" || s.transferGracePending {
+		s.lastRunTerminal = s.daemon.config.now()
+		if len(s.transferHolds) == 0 && policy.AutoCloseMS > 0 && s.closeCall == nil {
+			anchor := s.lastRunTerminal
+			if s.lastTransferTerminal.After(anchor) {
+				anchor = s.lastTransferTerminal
+			}
+			s.setDeadline(anchor.Add(time.Duration(policy.AutoCloseMS) * time.Millisecond))
+		}
+	}
+	if len(s.transferHolds) == 0 {
+		s.transferGracePending = false
 	}
 	// Ack precedes any subsequent worker command; the SDK publishes its cursor
 	// in CallObserved before dispatching those frames.

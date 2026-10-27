@@ -4,6 +4,8 @@ package daemon
 
 import (
 	"encoding/json"
+	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -20,6 +22,7 @@ const (
 )
 
 type answer struct {
+	after  func()
 	trace  []federation.TraceRecipient
 	value  any
 	code   int
@@ -49,28 +52,34 @@ type replyEvent struct {
 type supersedeEvent struct{}
 
 type session struct {
-	traceRequests              map[int64]*traceRequest
-	traceCollect               bool
-	traceCopy                  *federation.TraceDestination
-	traceTargets               []federation.TraceRecipient
-	traceTargetsBytes          int
-	runFromTrace               bool
-	runFromCompletion          bool
-	completion                 bool
-	commsRequests              map[int64]commsRequest
-	runID, runGeneration       string
-	runSequence                uint64
-	acknowledgedSequence       uint64
-	deadline, previousDeadline time.Time
-	autoClose                  <-chan time.Time
-	stopAuto                   func()
+	transferKey                           atomic.Pointer[string]
+	queued                                map[*routedRequest]bool
+	inboundBulk                           map[int64]func()
+	traceRequests                         map[int64]*traceRequest
+	traceCollect                          bool
+	traceCopy                             *federation.TraceDestination
+	traceTargets                          []federation.TraceRecipient
+	traceTargetsBytes                     int
+	runFromTrace                          bool
+	runFromCompletion                     bool
+	completion                            bool
+	commsRequests                         map[int64]commsRequest
+	runID, runGeneration                  string
+	runSequence                           uint64
+	acknowledgedSequence                  uint64
+	deadline, previousDeadline            time.Time
+	transferHolds                         map[string]bool
+	lastTransferTerminal, lastRunTerminal time.Time
+	transferGracePending                  bool
+	autoClose                             <-chan time.Time
+	stopAuto                              func()
 
+	supportsTransfer   bool
 	daemon             *Daemon
 	wire               *conn.Conn
 	inbox              chan any
 	identity           *entry
 	lastIn             int64
-	nextOut            int64
 	pending            map[int64]routedRequest
 	deferredDeliveries []routedRequest
 	requests           map[int64]*requestState
@@ -100,6 +109,7 @@ func newSession(daemon *Daemon) *session {
 		inbox:    make(chan any, conn.OutboxSize),
 		pending:  map[int64]routedRequest{},
 		requests: map[int64]*requestState{},
+		queued:   map[*routedRequest]bool{}, inboundBulk: map[int64]func(){},
 	}
 }
 
@@ -121,6 +131,10 @@ func (s *session) run() {
 			spawnTimer = s.launch.timer.C
 		}
 		select {
+		case event := <-s.wire.Dispatched():
+			s.dispatched(event)
+		case event := <-s.wire.Bulk():
+			s.handleEvent(event)
 		case event := <-s.inbox:
 			s.handleEvent(event)
 		case <-s.autoClose:
@@ -144,13 +158,35 @@ func (s *session) run() {
 
 func (s *session) handleEvent(event any) {
 	switch value := event.(type) {
+	case transferNoticeEvent:
+		s.transferNotice(value)
+	case transferNoticeInstalled:
+		s.transferNoticeInstalled(value)
+	case transferCallEvent:
+		if !s.daemon.directory.transferCurrent(value.entry, s, value.key) || s.stopping {
+			s.answerRouted(value.request, answer{code: protocol.NotConnected})
+		} else {
+			s.issue(value.request)
+		}
+	case transferHoldEvent:
+		ok := s.transferHold(value)
+		if value.reply != nil {
+			value.reply <- ok
+		}
 	case ownerEndEvent:
 		s.ownerEnded(value.owner)
 	case conn.Frame:
+		s.wire.DrainDispatched(s.dispatched)
+		if value.Release != nil {
+			s.inboundBulk[value.Value.ID] = value.Release
+		}
 		if !s.stopping {
 			s.handleFrame(value)
+		} else if value.Release != nil {
+			value.Release()
 		}
 	case conn.Closed:
+		s.wire.DrainDispatched(s.dispatched)
 		s.connectionClosed()
 		if s.launch != nil {
 			if !s.committed && s.launchResult == nil {
@@ -180,6 +216,14 @@ func (s *session) handleEvent(event any) {
 
 func (s *session) handleFrame(event conn.Frame) {
 	frame := event.Value
+	if event.Err == conn.ErrBulkCapacity {
+		if s.identity == nil {
+			s.reject(frame, protocol.InvalidHello)
+			return
+		}
+		s.error(frame, protocol.Busy, nil)
+		return
+	}
 	if event.Err != nil {
 		code := protocol.InvalidFrame
 		if s.identity == nil {
@@ -200,11 +244,11 @@ func (s *session) handleFrame(event conn.Frame) {
 		s.receiveResponse(frame)
 		return
 	}
-	if frame.ID <= s.lastIn {
+	if !event.Ordered && frame.ID <= s.lastIn {
 		s.reject(frame, protocol.InvalidFrame)
 		return
 	}
-	s.lastIn = frame.ID
+	s.lastIn = max(s.lastIn, frame.ID)
 	if frame.Method == "session.hello" && s.launch != nil {
 		s.reject(frame, protocol.InvalidHello)
 		return
@@ -255,6 +299,7 @@ func (s *session) firstHello(frame protocol.Frame) {
 			return
 		}
 		start.claimed <- struct{}{}
+		s.supportsTransfer = hello.SupportsTransfer && strings.HasPrefix(hello.LaunchToken, protocol.TransferTokenPrefix)
 		s.startLane(start, frame, hello.HelloDescription)
 	default:
 		s.reject(frame, protocol.InvalidHello)
@@ -262,11 +307,21 @@ func (s *session) firstHello(frame protocol.Frame) {
 }
 
 func (s *session) issue(request routedRequest) {
+	// Owner-local lifecycle calls also see requests already dispatched on wire,
+	// rather than depending on a later outer-loop response to drain correlation.
+	if s.wire != nil {
+		s.wire.DrainDispatched(s.dispatched)
+	}
 	if s.closeCall != nil && !request.collect {
 		s.answerRouted(request, answer{code: protocol.Busy})
 		return
 	}
-	if len(s.pending)+len(s.deferredDeliveries) >= maxPendingCalls {
+	limit := maxPendingCalls
+	bulk := request.method == "transfer.chunk"
+	if bulk {
+		limit = 4
+	}
+	if s.pendingCount(bulk) >= limit {
 		s.answerRouted(request, answer{code: protocol.Busy})
 		return
 	}
@@ -320,23 +375,40 @@ func (s *session) issue(request routedRequest) {
 		copy.SessionID = s.identity.row.SessionID
 		request.params = &copy
 	}
-	s.nextOut++
-	body, err := protocol.RequestBytes(s.nextOut, request.method, request.params)
-	if err != nil || !s.wire.Send(body) {
+
+	if _, err := protocol.EncodeParams(request.method, request.params); err != nil {
 		if request.runID != "" {
 			s.refuseRun(request.runID)
 		}
-		s.answerRouted(request, answer{code: protocol.NotConnected})
+		s.answerRouted(request, answer{code: protocol.Internal})
 		return
 	}
+	queued := &request
+	if !s.wire.Request(bulk, queued, func(id int64) ([]byte, error) { return protocol.RequestBytes(id, request.method, request.params) }, protocol.TransferStreamID(request.params)) {
+		if request.runID != "" {
+			s.refuseRun(request.runID)
+		}
+		code := protocol.NotConnected
+		if bulk {
+			code = protocol.Busy
+		}
+		s.answerRouted(request, answer{code: code})
+		return
+	}
+	s.queued[queued] = true
 	if request.runID != "" {
 		s.daemon.directory.admitted(s.identity, "turn.execute")
 		s.logRun(commslog.Method(request.method), request.runID, commslog.Running, "")
 	}
-	s.pending[s.nextOut] = request
+
 }
 
 func (s *session) receiveResponse(frame protocol.Frame) {
+	// Also enforce the dispatch-before-reply invariant for owner-local callers
+	// (including direct response handling), not just the outer event loop.
+	if s.wire != nil {
+		s.wire.DrainDispatched(s.dispatched)
+	}
 	request, ok := s.pending[frame.ID]
 	if !ok {
 		s.stopping = true
@@ -424,6 +496,10 @@ func (s *session) connectionClosed() {
 	s.wire.OwnerClosed()
 	s.daemon.directory.detach(s.identity, s)
 	s.settlePending(protocol.NotConnected)
+	for id, release := range s.inboundBulk {
+		release()
+		delete(s.inboundBulk, id)
+	}
 	for id, state := range s.requests {
 		s.logResult(state.frame, nil, protocol.NotConnected)
 		s.finishTrace(state.frame, nil, protocol.NotConnected, nil)
@@ -433,6 +509,12 @@ func (s *session) connectionClosed() {
 
 func (s *session) settlePending(code int) {
 	s.settleDeferredDeliveries(code)
+	for q := range s.queued {
+		delete(s.queued, q)
+		if s.closeCall == nil || q.reply != s.closeCall.reply {
+			s.answerRouted(*q, answer{code: code})
+		}
+	}
 	for id, request := range s.pending {
 		delete(s.pending, id)
 		if request.method == "turn.run" {
@@ -481,6 +563,7 @@ func (s *session) reject(frame protocol.Frame, code int) {
 }
 
 func (s *session) result(frame protocol.Frame, value any) {
+	defer s.releaseBulk(frame.ID)
 	s.logResult(frame, value, 0)
 	s.finishTrace(frame, value, 0, nil)
 	if s.forwarded != nil {
@@ -494,6 +577,7 @@ func (s *session) result(frame protocol.Frame, value any) {
 }
 
 func (s *session) error(frame protocol.Frame, code int, data any) {
+	defer s.releaseBulk(frame.ID)
 	s.logResult(frame, nil, code)
 	s.finishTrace(frame, nil, code, nil)
 	if s.forwarded != nil {
@@ -513,9 +597,7 @@ func (s *session) supersede() {
 	s.logSession(commslog.Superseded)
 	s.stopping = true
 	s.detachRequests(protocol.Superseded)
-	s.nextOut++
-	body, err := protocol.RequestBytes(s.nextOut, "session.superseded", struct{}{})
-	if err != nil || !s.wire.Finish(body, supersedeWriteBound) {
+	if !s.wire.FinishRequest(func(id int64) ([]byte, error) { return protocol.RequestBytes(id, "session.superseded", struct{}{}) }, supersedeWriteBound) {
 		s.wire.Close()
 	}
 }
@@ -530,4 +612,54 @@ func (s *session) await(requestID int64, leg int, reply <-chan answer, lifetime 
 		}
 		s.inbox <- replyEvent{requestID: requestID, leg: leg, answer: value}
 	}()
+}
+
+func (s *session) releaseBulk(id int64) {
+	if release := s.inboundBulk[id]; release != nil {
+		delete(s.inboundBulk, id)
+		release()
+	}
+}
+
+// Called only by the owner. Dispatch is queued before the corresponding socket
+// write and drained before a reply can be correlated.
+func (s *session) dispatched(event conn.Dispatched) {
+	switch p := event.Value.(type) {
+	case *routedRequest:
+		if s.queued[p] {
+			delete(s.queued, p)
+			s.pending[event.ID] = *p
+		}
+	case openDispatch:
+		s.openID = event.ID
+	}
+}
+
+type openDispatch struct{}
+
+func (s *session) pendingCount(bulk bool) int {
+	n := 0
+	if !bulk {
+		n = len(s.deferredDeliveries)
+	}
+	for _, p := range s.pending {
+		if (p.method == "transfer.chunk") == bulk {
+			n++
+		}
+	}
+	for p := range s.queued {
+		if (p.method == "transfer.chunk") == bulk {
+			n++
+		}
+	}
+	return n
+}
+func (s *session) requestCount(bulk bool) int {
+	n := 0
+	for _, p := range s.requests {
+		if (p.frame.Method == "transfer.chunk") == bulk {
+			n++
+		}
+	}
+	return n
 }

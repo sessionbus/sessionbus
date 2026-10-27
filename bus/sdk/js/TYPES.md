@@ -11,7 +11,7 @@ import type { SessionListResult, SessionSelfInfo } from '@sessionbus/kit/protoco
 JavaScript consumers can use JSDoc `import('@sessionbus/kit/protocol')` types.
 `Caller` methods reference these declarations for request and response shapes,
 including `list()` returning `Promise<SessionListResult>`. Existing JavaScript
-transport, validation and exports are unchanged. This is not a declaration of the
+methods retain their existing signatures. This is not a declaration of the
 entire SDK runtime API; projects checking JavaScript SDK implementation files can
 use TypeScript's `allowJs` and `maxNodeModuleJsDepth` (the package fixture checks
 `Caller` at depth 1).
@@ -72,3 +72,75 @@ releases each reservation once. These limits bound owned encoded payload, not
 JavaScript object overhead or process RSS; there is no preallocated buffer pool.
 For result/error replies, the owning peer or worker can still retire the connection
 under its existing failed-reply-write policy when admission rejects with `busy`.
+
+Transfer-capable connections additionally have four bulk correlations and four
+encoded bulk writes, including the one actually being written, bounded at 88 KiB
+each. Bulk does not consume the 256 ordinary slots. Request IDs are allocated at
+writer selection; eight control frames yield to one eligible bulk frame, with
+round-robin selection across transfer IDs. The one physical NDJSON frame already
+being written cannot be preempted. A stalled stream gives no finite latency bound.
+
+## Endpoint-local transfers
+
+`connectPeer` and `Worker` use the SDK's direct filesystem executor by default,
+as the current OS user in every product/mode. No native policy/mode mapping or
+permission-scope refusal is applied; real OS I/O failures remain failures. A raw
+`Connection` owner uses `new Transfers()`, registers `handleConnectionRequest`
+before `helloObserved`, supplies an identity-lifetime signal and joins
+`closeConnectionGeneration` on disposal. Custom `transferExecutor` options remain
+available for controlled integrations, without changing the default.
+
+The direct implementation reads a regular file and writes one random exclusive
+0600 sibling temp. JS no-replace publication uses atomic hard-link creation;
+filesystems without hard links fail with `atomic_no_replace_unsupported`
+(ENOTSUP/EOPNOTSUPP), without an overwrite downgrade or rename fallback.
+The Go SDK may use descriptor-relative atomic no-replace rename on Linux/Darwin
+when hard links are unsupported; unsupported atomic rename also fails clearly.
+Explicit overwrite uses atomic rename, replacing the named directory entry.
+Normal OS symlinks are followed when opening the source/parent; there is no
+product sandbox. The parent is resolved once. Public Node fs lacks relative
+link/rename through a directory FD. A parent rename/replacement detected before
+publication fails with `destination_parent_changed`; cleanup closes its handles
+and the receiver-local terminal reason names any leftover temp basename.
+Replacement between that check and the path-based publication can still publish
+at the user-named path in its current folder. This accepted race remains under
+deferred permission tightening; deterministic tests do not cover every race.
+Go publication remains descriptor-relative. No rollback, permission guarantee,
+fsync/durability or immutable source snapshot is promised. File identity, size and modification
+time are checked on the same source handle after streaming.
+
+Source handles provide `size()`, `read(buffer, signal)` returning a byte count,
+`verify()` on the same handle, and `close()`. Destination handles provide
+`write(buffer, signal)` returning a byte count, `commit()` returning
+`{published: boolean, error?: Error}`, and `abort()`. Return
+`{published: false, error: ErrTransferCommitUnknown}` when publication's
+answer is lost. An exception or malformed commit result is conservatively
+UNKNOWN. Confirmed publication remains completed even if cleanup fails. Abort
+must never retract a published destination. File/temp/checked-parent FDs in
+custom children count within the aggregate four per transfer; child processes,
+pipes and JSON buffers need separately bounded adapter costs. Custom executors
+must close/join their owned handles and admitted I/O even when reporting cleanup
+residue. An UNKNOWN commit must relinquish those resources before returning;
+the SDK never calls Abort on that unconfirmed publication.
+
+`Caller.action` accepts `transfer.offer`, `transfer.request`, `transfer.accept`,
+`transfer.cancel` and `transfer.status`. Local source/destination/overwrite fields
+are intercepted by `Transfers`; paths never go to the generic RPC callback.
+For a raw caller, pass `{transfers}` to the `Caller` constructor. Offer/request
+only bind local paths: no handle is opened before acceptance. The generation
+owns submitted/accepted work independently of tool cancellation. Lost replies
+are never replay authority. An accept result is the activated admission snapshot;
+a terminal notice may arrive first. A late accept result never recreates a
+retired binding. Ordinary message/Run delivery supplies notices;
+`projectDelivery` captures the receiver-only destination on the reader and
+returns a function to invoke off-reader before normal delivery. It may wait for
+an already-in-flight publication fact, and never invokes filesystem work or wake.
+
+Pending bindings are limited to eight and preparing/accepted bindings to two
+across overlapping generations in one manager. Cleanup stays charged while
+admitted I/O or a source worker remains live. After those join and handles close,
+terminal handling retires the slot even for UNKNOWN or closed-handle residue.
+Its machine ACK confirms local resource retirement, not publication success;
+the daemon can then release its host quota and lane hold. Custom executors must
+honour cancellation and bound their own resources. Generated wire DTOs contain
+no local filesystem path fields.

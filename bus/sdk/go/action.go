@@ -6,13 +6,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/antst/sessionbus/bus/sdk/go/protocol"
 )
 
-var Actions = []string{"list", "send", "spawn", "describe", "trace", "run", "start", "wait", "status", "interrupt", "close", "forget", "ack"}
+var Actions = []string{"list", "send", "spawn", "describe", "trace", "run", "start", "wait", "status", "interrupt", "close", "forget", "ack", "transfer.offer", "transfer.request", "transfer.accept", "transfer.cancel", "transfer.status"}
 
 func (c *Caller) Action(ctx context.Context, action string, args json.RawMessage) (json.RawMessage, error) {
+	if strings.HasPrefix(action, "transfer.") {
+		return c.transfers.Action(ctx, action, args)
+	}
 	method := map[string]string{
 		"list": "session.list", "send": "message.send", "spawn": "lane.spawn", "describe": "lane.describe",
 		"trace": "trace.configure",
