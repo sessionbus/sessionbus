@@ -57,7 +57,7 @@ test("caller maps operations to closed wire requests", async (t) => {
   for (const [action, args, method, params] of actions) { await caller.action(action, args); assert.deepEqual(seen.shift(), [method, params]); }
   await assert.rejects(caller.spawn({ resume_session_id: "lane@local", name: "child" }), (error) => error.message === `LaneSpawnRequest: "name" is not allowed with "resume_session_id"`);
   assert.equal(seen.length, 0);
-  assert.deepEqual(ACTIONS, ["list", "send", "spawn", "describe", "trace", "run", "start", "wait", "status", "interrupt", "close", "forget", "ack"]);
+  assert.deepEqual(ACTIONS, ["list", "send", "spawn", "describe", "trace", "run", "start", "wait", "status", "interrupt", "close", "forget", "ack", "transfer.offer", "transfer.request", "transfer.accept", "transfer.cancel", "transfer.status"]);
   await assert.rejects(caller.action("unknown", {}), /unknown action/);
   await assert.rejects(caller.action("list", { extra: true }), /SessionListRequest: "extra" is not allowed/);
   await assert.rejects(caller.action("trace", { session_id: "lane@local", mode: "all" }), /TraceConfigureRequest: "mode" must be one of/);

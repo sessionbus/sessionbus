@@ -839,6 +839,119 @@ and closes the connection without writing one.
 | `-32016` | `unsupported_trace` | `trace.configure` or `lane.spawn.trace` when an involved federated host or hub cannot carry or enforce tracing. Upgrade every involved daemon and hub before retrying. |
 | `-32603` | `internal` | The daemon's own shutdown or durable row-file operation fails; `data` carries its error text. An explicit uncertain-delivery callback may also use this code; it never certifies native refusal. |
 
+### 1.6 Negotiated endpoint-local file transfers
+
+Transfers are optional `transfer/1` machine traffic on the existing connection.
+The Go and JavaScript SDKs require an explicit native filesystem executor;
+neither a capability, a product name, a mode nor a cwd grants file access.
+Source/destination paths and overwrite permission remain local to that executor.
+The daemon and hub never open files, spool content or receive path fields.
+
+### Compatibility and identity
+
+A capable peer SDK reserves `info.sessionbus_transfer:1` in its existing hello.
+A new daemon returns `{capabilities:["transfer/1"]}` only to an opting-in
+endpoint. An old daemon returns `{}`; ordinary operations remain available and
+transfer operations refuse locally. Non-opting endpoints continue to receive
+the legacy empty hello result. Product-supplied info is not permission proof.
+
+Workers have no info object. A capable daemon prefixes its opaque random launch
+token with `sbt1:`. A new SDK sends `supports_transfer:true` only with that prefix
+and an explicit executor. Old workers echo the token unchanged, omit the bit and
+receive `{}`. The entire random token and product claim are still checked and
+consumed once. The prefix itself is neither authentication nor a filesystem grant.
+
+Federation negotiates `sessionbus-transfer/1` as a superset of the existing
+wake/trace/roster capabilities. Both legs must negotiate it before endpoint
+preparation. Older ALPN and no-ALPN fallbacks retain their ordinary behavior and
+receive no new machine control. Routes bind authenticated endpoint generations
+and both exact host attachments; reconnect never adopts or replays a transfer.
+
+### Public and machine methods
+
+The shared strict schema is authoritative. IDs are random opaque ASCII strings;
+byte counts/offsets range from zero through 1 GiB. SHA-256 is lowercase hex.
+Unknown fields, paths, caller-supplied identities and noncanonical base64 refuse.
+
+| Method | Direction and path-free parameters | Result |
+| --- | --- | --- |
+| `transfer.offer` | endpoint to coordinator: `{target,name}` | live descriptor |
+| `transfer.request` | endpoint to coordinator: `{target,what,name?}` | live descriptor |
+| `transfer.accept` | participant to coordinator: `{id,size?}` | live descriptor |
+| `transfer.status` | participant to coordinator: `{id}` | live descriptor |
+| `transfer.cancel` | participant to coordinator: `{id}` | terminal knowledge |
+| `transfer.prepare` | coordinator to endpoint: `{id,role,size?}` | source size or destination readiness |
+| `transfer.start` | coordinator to endpoint: `{id,role,size,credit?}` | destination ready or source started |
+| `transfer.chunk` | machine-only through pinned route: `{id,offset,data}` | next contiguous offset |
+| `transfer.finish` | machine-only through pinned route: `{id,bytes,sha256}` | publication knowledge |
+| `transfer.fail` | source machine to coordinator: `{id,reason}` | terminal knowledge |
+| `transfer.notice` | coordinator to endpoint: strict offer/request/terminal union | `{}` |
+
+`transfer.fail.reason` is only `source_changed` or `source_read_failed`. It is
+not a tool action, arbitrary native diagnostic or generic transport-loss label.
+It is sent before finish is requested and shares finish/cancel arbitration: a
+racing failure cannot downgrade a confirmed commit or assume nonpublication.
+Explicit `transfer.cancel` retains its own semantics.
+
+SDK tool actions intercept `source`, `destination` and `overwrite` locally
+before constructing these wire DTOs. Creation's one observed reply installs
+the path binding on the reader before any later callback. The tool's cancelled
+wait or lost response neither cancels admitted work nor authorizes a retry.
+
+Both workflows use one engine: prepare source once, obtain its same-handle stat,
+prepare the permitted destination/temp, acquire both generation-bound lane
+holds, acknowledge destination start, then start the source automatically.
+Filesystem work never runs in the reader/observed-result callback. Partial
+activation retires its own resources once; uncertain cleanup remains charged.
+
+### Bounds, publication and notices
+
+Raw chunks are at most 64 KiB with a 256 KiB credit ceiling. The current source
+uses one acknowledged chunk at a time; credit is returned only after destination
+write/capacity release. Chunks have four independent ingress/egress/correlation
+slots per connection and an 88 KiB encoded frame limit. Metadata is at most
+8 KiB. Bulk does not use the overflow-closing ordinary send queue or its 256
+correlations. One writer gives eight control frames then one eligible bulk
+frame, rotating transfer IDs. Request IDs are assigned at selection, in actual
+wire order. An in-progress physical NDJSON frame cannot be preempted; a stalled
+socket has no unconditional message-latency bound.
+
+Pending/pre-ID admission expires after ten minutes; preparing and no-progress
+streams have a sixty-second bound. A host admits 64 distinct pending and four
+preparing/accepted transfers; a hub admits 256 and sixteen. An endpoint admits
+eight pending and two preparing/accepted across overlapping SDK generations.
+The conservative controlled-data reservations are 21 MiB/host and 28 MiB/hub:
+host pending `64*3*16KiB`, active `4*3*1.5MiB`; hub pending `256*16KiB`, active
+`16*1.5MiB`. Endpoint stages are subsets, never added twice. These are controlled
+transfer-data budgets, not process RSS: existing ordinary socket readers/control
+queues, runtime overhead and native-executor processes/pipes are separate.
+Filesystem FDs are at most four aggregate per transfer across both roles,
+including native children, and sixteen per host. Executors must bound their own
+additional process, pipe and JSON costs. There is no default production executor.
+
+Atomic no-replace/overwrite publication is the receiver's commit point. A
+confirmed publication with failed temp cleanup remains completed. Confirmed
+nonpublication can fail/cancel and remove its temp. Lost native publish
+confirmation is UNKNOWN: no destructive Abort, late deletion or publication
+retry. Receiver-local publication knowledge and remote UNKNOWN remain distinct.
+Checksums establish received bytes, not an immutable source snapshot or fsync
+durability. Same-size in-place mutation can escape a final identity/size stat.
+
+Offer/request/terminal notices reuse ordinary daemon stage/wake policy. Machine
+chunks never enter model text, trace bodies or message contents. Only the
+receiver SDK projects its local destination into its ordinary terminal notice;
+the path never enters daemon/hub state or the sender's notice. A captured
+projection may wait off-reader for an already-in-flight publication fact.
+There is no durable terminal table, reconnect continuation or notice replay.
+
+Only accepted streaming/committing transfers hold lanes. Pending offers,
+status, collection, ACK and notices do not rearm grace. Grace starts after the
+later actual Run terminal/last held-transfer terminal, respecting zero grace,
+persistence and existing unavailable-Run behavior. Explicit close retires the
+exact generation's transfers with the same publication/UNKNOWN rules. Ordinary
+peer reconnect proceeds while old cleanup remains charged; executor disposal
+joins owned cleanup. No transfer invents a Run or forces a native wake.
+
 ### 3.1 Product contract
 
 A native product links one dependency-free reference kit and supplies six

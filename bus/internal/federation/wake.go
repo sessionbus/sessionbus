@@ -16,7 +16,7 @@ const WakeALPN = "sessionbus-wake/1"
 
 func SupportsWake(fd net.Conn) bool {
 	connection, ok := fd.(*tls.Conn)
-	return ok && connection.ConnectionState().NegotiatedProtocol == WakeALPN
+	return ok && supportsWakeProtocol(connection.ConnectionState().NegotiatedProtocol)
 }
 
 func validateCompletionRequest(request PublicRequest, fields map[string]json.RawMessage) error {

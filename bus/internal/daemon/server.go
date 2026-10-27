@@ -14,6 +14,7 @@ import (
 	"github.com/antst/sessionbus/bus/internal/commslog"
 	"github.com/antst/sessionbus/bus/internal/conn"
 	"github.com/antst/sessionbus/bus/internal/roster"
+	"github.com/antst/sessionbus/bus/internal/transfer"
 	"github.com/antst/sessionbus/bus/sdk/go/socketpath"
 )
 
@@ -30,6 +31,8 @@ type Config struct {
 }
 
 type Daemon struct {
+	transferBudget   *transfer.Budget
+	transfers        *transfer.Engine
 	traceContext     context.Context
 	traceCancel      context.CancelFunc
 	traceSource      string
@@ -118,6 +121,8 @@ func Start(config Config) (*Daemon, error) {
 	d := &Daemon{comms: logger, config: config, host: config.Host, table: store, listener: listener,
 		shutdown: make(chan struct{}), done: make(chan struct{}), acceptDone: make(chan struct{})}
 	d.traceContext, d.traceCancel = context.WithCancel(context.Background())
+	d.transferBudget = transfer.HostBudget()
+	d.transfers = transfer.NewEngine(d.traceContext, d.transferBudget)
 	d.traceSource = randomID("trace") + "@" + d.host
 	d.directory = newDirectory(d, rows)
 	if err = d.startOperator(); err != nil {
@@ -160,6 +165,7 @@ func (d *Daemon) accept() {
 		d.group.Add(1)
 		s := newSession(d)
 		s.wire = conn.Start(fd, s.inbox, &d.group)
+		s.wire.SetBulkGate(s.bulkAdmitted)
 		go func() { defer d.group.Done(); s.run() }()
 	}
 }

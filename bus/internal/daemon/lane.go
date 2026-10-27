@@ -34,12 +34,15 @@ func (s *session) startLane(start *launch, helloFrame protocol.Frame, hello prot
 		s.launchResult, s.stopping = &result, true
 		return
 	}
-	s.result(helloFrame, struct{}{})
+	result := protocol.HelloResult{}
+	if s.supportsTransfer {
+		result.Capabilities = []string{protocol.TransferCapability}
+	}
+	s.result(helloFrame, result)
 	s.beginOpen()
 }
 
 func (s *session) beginOpen() {
-	s.nextOut++
 	value := s.launch.entry.row
 	resume := ""
 	if !s.launch.fresh {
@@ -49,13 +52,13 @@ func (s *session) beginOpen() {
 		Name: value.Name, Groups: append([]string(nil), value.Groups...),
 		ResumeSessionID: resume, Open: value.Open, Policy: value.Policy,
 	}
-	body, err := protocol.RequestBytes(s.nextOut, "session.open", request)
-	if err != nil || !s.wire.Send(body) {
+
+	if !s.wire.Request(false, openDispatch{}, func(id int64) ([]byte, error) { return protocol.RequestBytes(id, "session.open", request) }) {
 		s.abortLaunch(answer{code: protocol.SpawnFailed, data: failure(s.child, "worker closed before open")})
 		s.hardStop()
 		return
 	}
-	s.openID = s.nextOut
+
 }
 
 func (s *session) finishOpen(frame protocol.Frame) {
@@ -126,6 +129,17 @@ func (s *session) beginClose(request routedRequest) {
 	s.stopAutoClose()
 	s.settleDeferredDeliveries(protocol.Busy)
 	s.closeCall = &request
+	if s.daemon.transfers != nil {
+		if key := s.transferKey.Load(); key != nil {
+			s.daemon.transfers.EndEndpoint(*key)
+			s.daemon.directory.mu.Lock()
+			link := s.daemon.federation
+			s.daemon.directory.mu.Unlock()
+			if link != nil && link.transfer {
+				link.bridge.endEndpoint(*key)
+			}
+		}
+	}
 	s.closeTimer = time.NewTimer(closeBound)
 	s.forget = request.params.(*protocol.SessionCloseRequest).Forget
 	s.writeDeferredClose()
@@ -137,20 +151,26 @@ func (s *session) writeDeferredClose() {
 	if s.closeCall == nil || s.closed || s.stopping {
 		return
 	}
+	for queued := range s.queued {
+		if queued.method == "session.close" || queued.method == "turn.execute" && queued.collect {
+			return
+		}
+	}
 	for _, pending := range s.pending {
 		if pending.method == "session.close" || pending.method == "turn.execute" && pending.collect {
 			return
 		}
 	}
 	request := *s.closeCall
-	s.nextOut++
-	body, err := protocol.RequestBytes(s.nextOut, "session.close", request.params)
-	if err != nil || !s.wire.Send(body) {
+
+	queued := &request
+	if !s.wire.Request(false, queued, func(id int64) ([]byte, error) { return protocol.RequestBytes(id, "session.close", request.params) }) {
 		s.hardStop()
 		return
 	}
+	s.queued[queued] = true
 	s.daemon.directory.admitted(s.identity, request.method)
-	s.pending[s.nextOut] = request
+
 }
 
 func (s *session) finishCloseResponse(frame protocol.Frame) {

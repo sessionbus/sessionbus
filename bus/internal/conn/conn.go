@@ -1,47 +1,79 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-// Package conn owns the socket reader and writer used by an Sessionbus session.
+// Package conn owns one socket reader/writer. Bulk has independent bounded
+// admission and never invokes the overflow-closing ordinary Send path.
 package conn
 
 import (
 	"bufio"
-	"io"
+	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/antst/sessionbus/bus/sdk/go/protocol"
+	"github.com/antst/sessionbus/bus/sdk/go/wirequeue"
 )
 
 const OutboxSize = 256
 
-type Frame struct {
-	Value protocol.Frame
-	Err   error
-}
+var ErrBulkCapacity = errors.New("bulk ingress capacity exhausted")
 
+type Frame struct {
+	Value   protocol.Frame
+	Err     error
+	Ordered bool
+	Release func()
+}
 type Closed struct {
 	Connection *Conn
 	Cause      error
 }
 
-type Conn struct {
-	fd        net.Conn
-	inbox     chan any
-	outbox    chan []byte
-	done      chan struct{}
-	finishing bool
+// Dispatched precedes any response to this request. Owners drain this dedicated
+// bounded channel before consuming replies; Build never waits on an owner loop.
+type Dispatched struct {
+	ID    int64
+	Value any
 }
+type Conn struct {
+	bulkGate   atomic.Pointer[func(protocol.Frame) bool]
+	fd         net.Conn
+	inbox      chan any
+	writer     *wirequeue.Queue
+	dispatched chan Dispatched
+	bulk       chan Frame
+	bulkSlots  chan struct{}
+	done       chan struct{}
+	finishing  bool
+}
+
+// SetBulkGate authorizes an already admitted ID/role/generation before a
+// payload can enter the retained bulk queue. Unknown IDs retain no chunk body.
+// The gate must not perform I/O or block on an owner/credit callback.
+func (c *Conn) SetBulkGate(gate func(protocol.Frame) bool) { c.bulkGate.Store(&gate) }
 
 func Start(fd net.Conn, inbox chan any, group *sync.WaitGroup) *Conn {
-	c := &Conn{fd: fd, inbox: inbox, outbox: make(chan []byte, OutboxSize), done: make(chan struct{})}
+	c := &Conn{fd: fd, inbox: inbox, writer: wirequeue.New(), dispatched: make(chan Dispatched, OutboxSize+8), bulk: make(chan Frame, 4), bulkSlots: make(chan struct{}, 4), done: make(chan struct{})}
 	group.Add(2)
 	go func() { defer group.Done(); c.read() }()
-	go func() { defer group.Done(); c.write() }()
+	go func() { defer group.Done(); _ = c.writer.Run(fd); c.Close() }()
 	return c
 }
-
-func (c *Conn) Done() <-chan struct{} { return c.done }
+func (c *Conn) Done() <-chan struct{}         { return c.done }
+func (c *Conn) Bulk() <-chan Frame            { return c.bulk }
+func (c *Conn) Dispatched() <-chan Dispatched { return c.dispatched }
+func (c *Conn) DrainDispatched(consume func(Dispatched)) {
+	for {
+		select {
+		case d := <-c.dispatched:
+			consume(d)
+		default:
+			return
+		}
+	}
+}
 func (c *Conn) Post(event any) bool {
 	select {
 	case <-c.done:
@@ -55,8 +87,6 @@ func (c *Conn) Post(event any) bool {
 		return false
 	}
 }
-
-// Send is called only by the connection's owner loop.
 func (c *Conn) Send(frame []byte) bool {
 	if c.finishing {
 		return false
@@ -66,19 +96,21 @@ func (c *Conn) Send(frame []byte) bool {
 		return false
 	default:
 	}
-	select {
-	case c.outbox <- frame:
-		return true
-	default:
+	err := c.writer.Submit(&wirequeue.Job{Weight: len(frame), Build: func(int64) ([]byte, error) { return frame, nil }})
+	if err != nil {
 		c.Close()
 		return false
 	}
+	return true
 }
 
-// Finish queues the last frame, bounds its write, then closes the outbox.
-// It is called only by the connection's owner loop.
-func (c *Conn) Finish(frame []byte, bound time.Duration) bool {
-	if c.finishing {
+// Request allocates its ID only after 8-control/1-bulk writer selection. Value
+// is the owner's queued correlation, charged at admission, not another copy.
+func (c *Conn) Request(bulk bool, value any, build func(int64) ([]byte, error), stream ...string) bool {
+	return c.request(bulk, value, build, false, stream...)
+}
+func (c *Conn) request(bulk bool, value any, build func(int64) ([]byte, error), finish bool, stream ...string) bool {
+	if c.finishing && !finish {
 		return false
 	}
 	select {
@@ -86,31 +118,66 @@ func (c *Conn) Finish(frame []byte, bound time.Duration) bool {
 		return false
 	default:
 	}
+	weight := protocol.MaxFrameBytes
+	if bulk {
+		weight = protocol.MaxTransferFrameBytes
+	}
+	streamID := ""
+	if len(stream) > 0 {
+		streamID = stream[0]
+	}
+	job := &wirequeue.Job{Stream: streamID, Request: true, Bulk: bulk, Weight: weight, Build: func(id int64) ([]byte, error) {
+		body, err := build(id)
+		if err != nil {
+			return nil, err
+		}
+		if value != nil {
+			select {
+			case c.dispatched <- Dispatched{ID: id, Value: value}:
+			default:
+				return nil, errors.New("dispatch reservation exceeded")
+			}
+		}
+		return body, nil
+	}, Complete: func(err error) {
+		if err != nil || finish {
+			c.Close()
+		}
+	}}
+	if err := c.writer.Submit(job); err != nil {
+		if !bulk {
+			c.Close()
+		}
+		return false
+	}
+	return true
+}
+func (c *Conn) Finish(frame []byte, bound time.Duration) bool {
+	if c.finishing {
+		return false
+	}
 	c.finishing = true
 	_ = c.fd.SetWriteDeadline(time.Now().Add(bound))
-	select {
-	case c.outbox <- frame:
-		close(c.outbox)
-		return true
-	default:
+	err := c.writer.Submit(&wirequeue.Job{Weight: len(frame), Build: func(int64) ([]byte, error) { return frame, nil }, Complete: func(error) { c.Close() }})
+	if err != nil {
 		c.Close()
 		return false
 	}
+	return true
 }
-
-func (c *Conn) Close() {
-	_ = c.fd.Close()
-}
-
-func (c *Conn) OwnerClosed() {
-	if !c.finishing {
-		c.finishing = true
-		close(c.outbox)
+func (c *Conn) FinishRequest(build func(int64) ([]byte, error), bound time.Duration) bool {
+	if c.finishing {
+		return false
 	}
+	c.finishing = true
+	_ = c.fd.SetWriteDeadline(time.Now().Add(bound))
+	return c.request(false, nil, build, true)
 }
-
+func (c *Conn) Close()       { _ = c.fd.Close(); c.writer.Close(wirequeue.ErrClosed) }
+func (c *Conn) OwnerClosed() { c.finishing = true; c.writer.Close(wirequeue.ErrClosed) }
 func (c *Conn) read() {
 	reader := bufio.NewReaderSize(c.fd, protocol.MaxFrameBytes)
+	last := int64(0)
 	for {
 		body, err := reader.ReadSlice('\n')
 		if err != nil {
@@ -120,38 +187,34 @@ func (c *Conn) read() {
 			return
 		}
 		value, decodeErr := protocol.DecodeFrame(body[:len(body)-1])
-		c.inbox <- Frame{Value: value, Err: decodeErr}
-	}
-}
-
-func (c *Conn) write() {
-	for {
-		select {
-		case <-c.done:
-			return
-		case frame, ok := <-c.outbox:
-			if !ok {
-				c.Close()
-				return
-			}
-			if err := writeFull(c.fd, frame); err != nil {
-				c.Close()
-				return
+		event := Frame{Value: value, Err: decodeErr, Ordered: true}
+		if value.Request {
+			if value.ID <= last {
+				event.Err = errors.New("nonmonotonic request id")
+			} else {
+				last = value.ID
 			}
 		}
-	}
-}
-
-func writeFull(writer io.Writer, body []byte) error {
-	for len(body) != 0 {
-		written, err := writer.Write(body)
-		if err != nil {
-			return err
+		if event.Err == nil && value.Request && value.Method == "transfer.chunk" {
+			gate := c.bulkGate.Load()
+			if gate == nil || !(*gate)(value) {
+				event.Err = ErrBulkCapacity
+				event.Value.Params = nil
+				c.inbox <- event
+				continue
+			}
+			select {
+			case c.bulkSlots <- struct{}{}:
+				var once sync.Once
+				event.Release = func() { once.Do(func() { <-c.bulkSlots }) }
+				c.bulk <- event
+			default:
+				event.Err = ErrBulkCapacity
+				event.Value.Params = nil
+				c.inbox <- event
+			}
+		} else {
+			c.inbox <- event
 		}
-		if written == 0 {
-			return io.ErrShortWrite
-		}
-		body = body[written:]
 	}
-	return nil
 }

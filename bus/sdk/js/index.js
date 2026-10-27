@@ -8,6 +8,7 @@ const { isDeepStrictEqual } = require("node:util");
 const { ACTIONS, Caller } = require("./caller.js");
 const { Connection, ProtocolError } = require("./connection.js");
 const { schema, validate, encode } = require("./schema.js");
+const { Transfers, ErrTransferCommitUnknown } = require("./transfers.js");
 
 const ENV = ["SESSIONBUS_LAUNCH_TOKEN", "SESSIONBUS_LOCAL_KEY", "SESSIONBUS_SOCKET"];
 const never = new Promise(() => {});
@@ -37,6 +38,7 @@ class Run {
 class Worker {
   constructor(callbacks, env = process.env, options = {}) {
     this.callbacks = callbacks;
+    this.transfers = options.transferExecutor ? new Transfers(options.transferExecutor) : null;
     this.env = env;
     this.connect = options.connect || ((path) => net.createConnection(path));
     this.controller = new AbortController();
@@ -57,12 +59,16 @@ class Worker {
       const stream = this.connect(socket);
       this.connection = new Connection(stream, true, (request) => this._handle(request));
       this.connection.signal.addEventListener("abort", () => this.controller.abort(this.connection.signal.reason), { once: true });
-      await this.connection.call("session.hello", { protocol: 1, launch_token: token, ...hello }, this.controller.signal); cause = await this.connection.done; throw cause;
-    } finally { this.run?.finish?.(); try { await this._closeProduct(); } finally { this.finish(cause); } }
+      const supportsTransfer = this.transfers && token.startsWith("sbt1:");
+      await this.connection.call("session.hello", { protocol: 1, launch_token: token, ...hello, ...(supportsTransfer ? { supports_transfer: true } : {}) }, this.controller.signal, result => {
+        this.transfers?.attach(this.connection, this.controller.signal, supportsTransfer && result.capabilities?.includes("transfer/1") === true);
+      }); cause = await this.connection.done; throw cause;
+    } finally { this.run?.finish?.(); try { await this.transfers?.closeConnectionGeneration(); await this._closeProduct(); } finally { this.finish(cause); } }
   }
   call(method, params, signal = this.controller.signal) { return this.connection.call(method, params, signal); }
   shutdown() { this.connection?.close(); }
   _handle(request) {
+    if (this.transfers?.handleConnectionRequest(this.connection, request)) return;
     if (request.method === "session.superseded") { void this.connection.result(request, {}).finally(() => this.shutdown()); return; }
     if (request.method === "session.open") {
       if (this.opening || this.connection.signal.aborted || this.run && !this.run.Done) { void this._replyError(request, -32600); return; }
@@ -79,7 +85,7 @@ class Worker {
       if (this.run.controller.signal.aborted) { void this.connection.error(request, -32004); return; }
       const run = this.run, call = !run.interrupted; run.interrupted = true; queueMicrotask(() => void this._interrupt(request, run, call)); return;
     }
-    if (request.method === "message.deliver") { if (request.params.run_id) { this._execute(request, request.params); return; } const run = this.run; if (run && !run.Done) void this.connection.result(request, { disposition: "rejected", reason: "closing" }); else queueMicrotask(() => void this._deliver(request, run)); return; }
+    if (request.method === "message.deliver") { const project = this.transfers?.projectDelivery(this.connection, request.params); if (request.params.run_id) { this._execute(request, request.params, project); return; } const run = this.run; if (run && !run.Done) void this.connection.result(request, { disposition: "rejected", reason: "closing" }); else queueMicrotask(() => void this._deliver(request, run, project)); return; }
     if (request.method === "session.close") {
       const run = this.run;
       if (run && !run.Done) return this.shutdown();
@@ -98,7 +104,7 @@ class Worker {
     this.sessionID = result.session_id + (at < 0 ? "" : request.params.name.slice(at));
     try { await this.connection.result(request, result); } catch { this.shutdown(); }
   }
-  _execute(request, delivery) {
+  _execute(request, delivery, project) {
     if (!this.opened || this.run || this.records.length >= 256) { void this._replyError(request, -32003); return; }
     const ref = { session_id: delivery ? this.sessionID : request.params.session_id, run_id: request.params.run_id };
     const parsed = runSequence(ref.run_id);
@@ -110,14 +116,14 @@ class Worker {
     else seed = { text: request.params.input };
     this.run = run; this.records.push(record);
     void (async () => {
-      try { if (!delivery) await this.connection.result(request, ref); await this._run(run, record, seed); } catch { this.shutdown(); }
+      try { if (!delivery) await this.connection.result(request, ref); await this._run(run, record, seed, project); } catch { this.shutdown(); }
     })();
   }
-  async _run(run, record, seed) {
+  async _run(run, record, seed, project) {
     let status = { ...record.status, state: "done" };
     try {
       let result;
-      try { result = await this.callbacks.run(run.controller.signal, run, seed); } finally { run.controller.abort(); }
+      try { if (project) await project(run.controller.signal, seed.delivery); result = await this.callbacks.run(run.controller.signal, run, seed); } finally { run.controller.abort(); }
       status.result = structuredClone(result);
     } catch (error) { status = { ...record.status, state: "unavailable", reason: clean(error) }; }
     try {
@@ -175,10 +181,10 @@ class Worker {
     }
     try { await this.connection.result(request, {}); } catch { this.shutdown(); }
   }
-  async _deliver(request, run) {
+  async _deliver(request, run, project) {
     if (!run || run.controller.signal.aborted) { await this._replyError(request, -32004); return; }
     let receipt, failure;
-    try { receipt = await this.callbacks.deliver(this.controller.signal, request.params, undefined, run); } catch (error) { failure = error; }
+    try { if (project) await project(this.controller.signal, request.params); receipt = await this.callbacks.deliver(this.controller.signal, request.params, undefined, run); } catch (error) { failure = error; }
     try { await this._deliveryReply(request, receipt, failure); } catch {}
   }
   async _deliveryReply(request, receipt, failure) {
@@ -196,6 +202,7 @@ class Worker {
     }
     while (this.waiters && !this.connection.signal.aborted) await this.changed;
     this.controller.abort();
+    await this.transfers?.closeConnectionGeneration();
     await this._closeProduct(this.connection.signal);
     try { await this.connection.result(request, {}); } catch { this.shutdown(); } finally { this.shutdown(); }
   }
@@ -205,6 +212,7 @@ class Worker {
 
 class Peer {
   constructor(identity, deliver, env, options) {
+    this.transfers = options.transferExecutor ? new Transfers(options.transferExecutor) : null;
     this.identity = snapshot(identity);
     this.deliver = deliver;
     this.connect = options.connect || ((path) => net.createConnection(path));
@@ -247,13 +255,14 @@ class Peer {
     try { await this._hello(connection); } catch (error) { if (this._failHello(error, connection)) return never; connection.close(); }
     if (!connection.signal.aborted) void connection.done.then(() => this._lost(connection)); else this._lost(connection);
   }
-  async _hello(connection, identity = this.identity, acknowledged) { for (;;) { let installed = false; const result = await connection.call("session.hello", { protocol: 1, ...identity }, undefined, () => {
+  async _hello(connection, identity = this.identity, acknowledged) { for (;;) { let installed = false; const info = { ...identity.info }; delete info.sessionbus_transfer; if (this.transfers) info.sessionbus_transfer = 1; const result = await connection.call("session.hello", { protocol: 1, ...identity, info }, undefined, helloResult => {
     if (this.wire !== connection || this.terminal) throw new Error("not connected");
-    if (identity === this.identity) { if (this.admitted?.session_id !== identity.session_id || !this.identityController || this.identityController.signal.aborted) this.identityController = new AbortController(); this.admitted = identity; this.connection = connection; installed = true; }
+    if (identity === this.identity) { if (this.admitted?.session_id !== identity.session_id || !this.identityController || this.identityController.signal.aborted) this.identityController = new AbortController(); this.admitted = identity; this.connection = connection; this.transfers?.attach(connection, this.identityController.signal, helloResult.capabilities?.includes("transfer/1") === true); installed = true; }
   }); if (installed) { acknowledged?.(); return result; } identity = this.identity; } }
   _lost(connection) { if (this.wire !== connection || this.terminal) return; this.wire = null; this.connection = null; this.admitted = null; this.identityController?.abort(connection.signal.reason); this.identityController = null; this.caller.disconnected(); this.schedule(() => { this.ready = this._open(); }, 2000); }
   _failHello(error, connection) { if (!(error instanceof ProtocolError) || error.code !== -32602) return false; this.terminal = true; this.error = error; this.wire = null; this.connection = null; this.identityController?.abort(error); this.identityController = null; this.admitted = null; this.caller.disconnected(); connection.close(); this.finish(); return true; }
   _handle(request, connection) {
+    if (this.transfers?.handleConnectionRequest(connection, request)) return;
     if (request.method === "session.superseded") {
       this.terminal = true; this.error = new ProtocolError({ code: -32012, message: "superseded" });
       this.connection = null; this.caller.disconnected();
@@ -264,7 +273,7 @@ class Peer {
       connection.close(); this.finish();
       return;
     }
-    if (request.method === "message.deliver") { const current = this.connection === connection && this.admitted && this.identityController && !this.identityController.signal.aborted; const admission = current ? { identity: snapshot(this.admitted), signal: this.identityController.signal } : null; void Promise.resolve().then(() => admission ? this.deliver(admission.signal, request.params, admission.identity) : { disposition: "rejected", reason: "closing" }).then((result) => connection.result(request, result), (error) => error instanceof ProtocolError && error.code === -32603 ? connection.error(request, error.code, error.data) : connection.result(request, { disposition: "rejected", reason: clean(error) })).catch(() => connection.close()); }
+    if (request.method === "message.deliver") { const project = this.transfers?.projectDelivery(connection, request.params); const current = this.connection === connection && this.admitted && this.identityController && !this.identityController.signal.aborted; const admission = current ? { identity: snapshot(this.admitted), signal: this.identityController.signal } : null; void Promise.resolve().then(async () => { if (!admission) return { disposition: "rejected", reason: "closing" }; if (project) await project(admission.signal, request.params); return this.deliver(admission.signal, request.params, admission.identity); }).then((result) => connection.result(request, result), (error) => error instanceof ProtocolError && error.code === -32603 ? connection.error(request, error.code, error.data) : connection.result(request, { disposition: "rejected", reason: clean(error) })).catch(() => connection.close()); }
   }
 }
 
@@ -286,4 +295,4 @@ function runSequence(id) { const match = /^([^/]+)\/([1-9][0-9]*)$/.exec(id); if
 function clean(error) { return String(error?.message || error || "product callback failed"); }
 function callbackError(callback, error) { if (error) process.stderr.write(`sessionbus: product ${callback}: ${JSON.stringify(clean(error))}\n`); }
 
-module.exports = { ACTIONS, Caller, connectPeer, Connection, ENV, Peer, ProtocolError, Run, serveWorker, Worker, schema, validate };
+module.exports = { ACTIONS, Caller, connectPeer, Connection, ENV, Peer, ProtocolError, Run, serveWorker, Worker, schema, validate, Transfers, ErrTransferCommitUnknown };

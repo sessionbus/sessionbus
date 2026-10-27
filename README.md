@@ -403,6 +403,15 @@ Cancellation stops only that wait and preserves the run/result handle for a
 later status or wait call. It does not interrupt the native run. Existing Go
 `Wait(request)` remains available without cancellation.
 
+Optional file transfers use the same connection and require an SDK-local native
+filesystem permission executor. Go provides `ConnectPeerWithTransfersContext`,
+`NewWorkerWithTransfers` and raw-connection hooks; JavaScript accepts a
+`transferExecutor` option or a raw `Transfers` manager. No default executor or
+implicit filesystem grant is installed. Offer/request bind local paths without
+opening a file until acceptance; inter-host bytes travel only through the hub.
+See [the negotiated protocol](bus/docs/PROTOCOL.md#16-negotiated-endpoint-local-file-transfers)
+and [JavaScript executor API](bus/sdk/js/TYPES.md#endpoint-local-transfers).
+
 List replies include `self_info` with the bound caller's canonical `session_id`,
 optional `name`, `product`, and `groups`, even when filters select other sessions
 or hosts. Compare `self_info.session_id` with row IDs to identify self. Go exposes

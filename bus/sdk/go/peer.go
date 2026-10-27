@@ -23,6 +23,7 @@ var dialPeer = (&net.Dialer{}).DialContext
 type DeliverFunc func(context.Context, PeerIdentity, DeliveryRequest) (DeliveryReceipt, error)
 
 type Peer struct {
+	Transfers     *Transfers
 	Caller        *Caller
 	mu            sync.Mutex
 	identity      PeerIdentity
@@ -45,6 +46,18 @@ func ConnectPeer(identity PeerIdentity, deliver DeliverFunc) (*Peer, error) {
 
 // ConnectPeerContext binds the peer connection and every reconnect attempt to ctx.
 func ConnectPeerContext(ctx context.Context, identity PeerIdentity, deliver DeliverFunc) (*Peer, error) {
+	return connectPeerContext(ctx, identity, deliver, nil)
+}
+
+// ConnectPeerWithTransfersContext opts into machine transfers only when the
+// supplied executor can enforce effective native permission on actual handles.
+func ConnectPeerWithTransfersContext(ctx context.Context, identity PeerIdentity, deliver DeliverFunc, executor TransferExecutor) (*Peer, error) {
+	if executor == nil {
+		return nil, ErrTransferScope
+	}
+	return connectPeerContext(ctx, identity, deliver, executor)
+}
+func connectPeerContext(ctx context.Context, identity PeerIdentity, deliver DeliverFunc, executor TransferExecutor) (*Peer, error) {
 	if ctx == nil {
 		return nil, errors.New("peer context is nil")
 	}
@@ -58,7 +71,11 @@ func ConnectPeerContext(ctx context.Context, identity PeerIdentity, deliver Deli
 	}
 	peerCtx, cancel := context.WithCancel(ctx)
 	p := &Peer{identity: identity, deliver: deliver, socket: socket, ctx: peerCtx, cancel: cancel, ready: make(chan struct{}), closed: make(chan struct{})}
+	if executor != nil {
+		p.Transfers = newTransfers(executor)
+	}
 	p.Caller = NewCaller(p.Call)
+	p.Caller.transfers = p.Transfers
 	go p.connect()
 	return p, nil
 }
@@ -186,6 +203,7 @@ func (p *Peer) connection() *rpc.Conn {
 
 func (p *Peer) connect() {
 	defer close(p.closed)
+	defer p.Transfers.wait(nil)
 	ready := p.ready
 	for {
 		fd, err := dialPeer(p.ctx, "unix", p.socket)
@@ -219,6 +237,8 @@ func (p *Peer) connect() {
 				p.mu.Unlock()
 			}
 			_ = wire.Close()
+			// Old-generation cleanup remains charged, but never blocks ordinary
+			// reconnection. Explicit peer disposal joins every owned generation above.
 			if p.failHello(helloErr) {
 				return
 			}
@@ -253,7 +273,18 @@ func (p *Peer) hello(ctx context.Context, wire *rpc.Conn, identity PeerIdentity,
 func (p *Peer) helloObserved(ctx context.Context, wire *rpc.Conn, identity PeerIdentity, generation uint64, acknowledged func()) error {
 	for {
 		installed := false
-		err := wire.CallObserved(ctx, "session.hello", identity, &struct{}{}, func() error {
+		hello := identity
+		hello.Info = make(map[string]any, len(identity.Info)+1)
+		for key, value := range identity.Info {
+			if key != protocol.TransferInfoKey {
+				hello.Info[key] = value
+			}
+		}
+		if p.Transfers != nil {
+			hello.Info[protocol.TransferInfoKey] = 1
+		}
+		var helloResult protocol.HelloResult
+		err := wire.CallObserved(ctx, "session.hello", hello, &helloResult, func() error {
 			p.mu.Lock()
 			defer p.mu.Unlock()
 			if p.ctx.Err() != nil {
@@ -264,6 +295,15 @@ func (p *Peer) helloObserved(ctx context.Context, wire *rpc.Conn, identity PeerI
 					p.identityCtx, p.identityStop = context.WithCancel(wire.Context())
 				}
 				p.admitted, p.wire, installed = identity, wire, true
+				if p.Transfers != nil {
+					enabled := false
+					for _, capability := range helloResult.Capabilities {
+						if capability == protocol.TransferCapability {
+							enabled = true
+						}
+					}
+					p.Transfers.attach(wire, p.identityCtx, enabled)
+				}
 			} else {
 				identity, generation = p.identity, p.generation
 			}
@@ -282,6 +322,9 @@ func (p *Peer) helloObserved(ctx context.Context, wire *rpc.Conn, identity PeerI
 }
 
 func (p *Peer) handle(wire *rpc.Conn, request *rpc.Request) {
+	if p.Transfers.handle(wire, request) {
+		return
+	}
 	switch request.Method {
 	case "session.superseded":
 		p.mu.Lock()
@@ -296,6 +339,7 @@ func (p *Peer) handle(wire *rpc.Conn, request *rpc.Request) {
 		p.Caller.disconnected()
 		go func() { _ = wire.Result(request, struct{}{}); p.cancel(); _ = wire.Close() }()
 	case "message.deliver":
+		project := p.Transfers.ProjectDelivery(wire, request.Params.(*DeliveryRequest))
 		p.mu.Lock()
 		identity, err := snapshotIdentity(p.admitted)
 		identityCtx := p.identityCtx
@@ -303,6 +347,9 @@ func (p *Peer) handle(wire *rpc.Conn, request *rpc.Request) {
 		p.mu.Unlock()
 		go func() {
 			receipt := DeliveryReceipt{Disposition: "rejected", Reason: "closing"}
+			if current && err == nil && project != nil {
+				err = project(identityCtx, request.Params.(*DeliveryRequest))
+			}
 			if current && err == nil {
 				receipt, err = p.deliver(identityCtx, identity, *request.Params.(*DeliveryRequest))
 			}

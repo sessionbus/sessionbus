@@ -16,6 +16,7 @@ export interface HelloDescription {
   extra_arguments: ExtraArgument[];
 }
 export interface WorkerHello extends HelloDescription {
+  supports_transfer?: boolean;
   protocol: Integer;
   launch_token: string;
 }
@@ -213,4 +214,97 @@ export interface RPCError {
   code: number /* int */;
   message: string;
   data?: unknown;
+}
+export interface HelloResult {
+  capabilities?: string[];
+}
+export interface TransferOffer {
+  target: string;
+  name: string;
+}
+export interface TransferRequest {
+  target: string;
+  what: string;
+  name?: string;
+}
+export interface TransferTarget {
+  id: string;
+}
+export interface TransferAccept {
+  id: string;
+  size?: Integer;
+}
+/**
+ * A descriptor is live state only. Nothing in this type is a filesystem path or
+ * an endpoint-supplied identity assertion.
+ */
+export interface TransferDescriptor {
+  id: string;
+  sender: string;
+  receiver: string;
+  name: string;
+  size?: Integer;
+  created_by: string;
+  state: string;
+  bytes: Integer;
+}
+export interface TransferPrepare {
+  id: string;
+  role: string;
+  size?: Integer;
+}
+export interface TransferPrepared {
+  id: string;
+  size?: Integer;
+  ready?: boolean;
+}
+export interface TransferStart {
+  id: string;
+  role: string;
+  size: Integer;
+  credit?: Integer;
+}
+export interface TransferStarted {
+  id: string;
+  ready?: boolean;
+  started?: boolean;
+}
+export interface TransferChunk {
+  id: string;
+  offset: Integer;
+  data: string;
+}
+export interface TransferCredit {
+  offset: Integer;
+}
+export interface TransferFinish {
+  id: string;
+  bytes: Integer;
+  sha256: string;
+}
+/**
+ * TransferFailure is machine-only and must precede requesting publication.
+ */
+export interface TransferFailure {
+  id: string;
+  reason: string;
+}
+export interface TransferTerminal {
+  id: string;
+  outcome: string;
+  bytes: Integer;
+  sha256?: string;
+  reason?: string;
+}
+export interface TransferNotice {
+  kind: string;
+  id: string;
+  from?: DeliverySource;
+  name?: string;
+  what?: string;
+  size?: Integer;
+  outcome?: string;
+  bytes?: Integer;
+  sha256?: string;
+  reason?: string;
 }

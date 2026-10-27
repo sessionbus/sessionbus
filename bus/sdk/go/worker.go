@@ -68,6 +68,7 @@ func (r *Run) ReportDelivery(value DeliveryReceipt, failure error) error {
 }
 
 type Worker struct {
+	transfers    *Transfers
 	supportsWake bool
 	sessionID    string
 	records      []*workerRecord
@@ -103,6 +104,19 @@ func NewWorker(product WorkerCallbacks) *Worker {
 	})
 	return worker
 }
+
+// NewWorkerWithTransfers adds the SDK-local executor without changing the
+// product's hello/describe contract or granting paths to a legacy daemon.
+func NewWorkerWithTransfers(product WorkerCallbacks, executor TransferExecutor) (*Worker, error) {
+	if executor == nil {
+		return nil, ErrTransferScope
+	}
+	w := NewWorker(product)
+	w.transfers = newTransfers(executor)
+	w.caller.transfers = w.transfers
+	return w, nil
+}
+func (w *Worker) Transfers() *Transfers { return w.transfers }
 
 func (w *Worker) Closed() <-chan struct{} { return w.closed }
 func (w *Worker) Caller() *Caller         { return w.caller }
@@ -157,8 +171,21 @@ func (w *Worker) Serve(ctx context.Context) error {
 			<-stopDone
 		}
 	}()
-	request := protocol.WorkerHello{Protocol: 1, LaunchToken: token, HelloDescription: hello}
-	if err = w.conn.Call(ctx, "session.hello", request, &struct{}{}); err == nil {
+	request := protocol.WorkerHello{Protocol: 1, LaunchToken: token, HelloDescription: hello,
+		SupportsTransfer: w.transfers != nil && strings.HasPrefix(token, protocol.TransferTokenPrefix)}
+	var helloResult protocol.HelloResult
+	if err = w.conn.CallObserved(ctx, "session.hello", request, &helloResult, func() error {
+		if w.transfers != nil {
+			enabled := false
+			for _, capability := range helloResult.Capabilities {
+				if capability == protocol.TransferCapability {
+					enabled = true
+				}
+			}
+			w.transfers.attach(w.conn, w.context, enabled)
+		}
+		return nil
+	}); err == nil {
 		<-w.conn.Done()
 		err = rpc.ErrClosed
 	}
@@ -171,6 +198,7 @@ func (w *Worker) Serve(ctx context.Context) error {
 		w.run.finish()
 	}
 	w.mu.Unlock()
+	w.transfers.wait(w.conn)
 	w.closeProduct(w.conn.Context())
 	return err
 }
@@ -201,6 +229,9 @@ func (w *Worker) Shutdown() {
 }
 
 func (w *Worker) handle(ctx context.Context, request *rpc.Request) {
+	if w.transfers.handle(w.conn, request) {
+		return
+	}
 	switch request.Method {
 	case "session.superseded":
 		go func() { w.reply(w.conn.Result(request, struct{}{})); _ = w.conn.Close() }()
@@ -241,8 +272,9 @@ func (w *Worker) handle(ctx context.Context, request *rpc.Request) {
 		go w.interrupt(request, slot, call)
 	case "message.deliver":
 		delivery := request.Params.(*DeliveryRequest)
+		project := w.transfers.ProjectDelivery(w.conn, delivery)
 		if delivery.RunID != "" {
-			w.execute(request, delivery)
+			w.execute(request, delivery, project)
 			return
 		}
 		w.mu.Lock()
@@ -253,7 +285,7 @@ func (w *Worker) handle(ctx context.Context, request *rpc.Request) {
 			go w.answer(request, DeliveryReceipt{Disposition: "rejected", Reason: "closing"}, 0)
 			return
 		}
-		go w.deliver(w.context, request, slot)
+		go w.deliver(w.context, request, slot, project)
 	case "session.close":
 		w.mu.Lock()
 		slot := w.run
@@ -304,12 +336,18 @@ func (w *Worker) interrupt(request *rpc.Request, run *Run, call bool) {
 	w.reply(w.conn.Result(request, struct{}{}))
 }
 
-func (w *Worker) deliver(ctx context.Context, request *rpc.Request, run *Run) {
+func (w *Worker) deliver(ctx context.Context, request *rpc.Request, run *Run, project ...func(context.Context, *DeliveryRequest) error) {
 	// The native Run can finish before this goroutine gets scheduled, while
 	// turn.ready is still in flight. No native submission has occurred here.
 	if run == nil || run.context.Err() != nil {
 		w.reply(w.conn.Error(request, protocol.NotRunning, nil))
 		return
+	}
+	if len(project) > 0 && project[0] != nil {
+		if err := project[0](ctx, request.Params.(*DeliveryRequest)); err != nil {
+			w.reply(w.deliveryReply(request, DeliveryReceipt{Disposition: "rejected", Reason: "closing"}, nil))
+			return
+		}
 	}
 	receipt, err := w.product.Deliver(ctx, *request.Params.(*DeliveryRequest), run)
 	w.reply(w.deliveryReply(request, receipt, err))
@@ -360,6 +398,7 @@ func (w *Worker) close(ctx context.Context, request *rpc.Request, slot *Run, int
 		}
 	}
 	w.cancel()
+	w.transfers.wait(w.conn)
 	w.closeProduct(ctx)
 	w.reply(w.conn.Result(request, struct{}{}))
 	_ = w.conn.Close()

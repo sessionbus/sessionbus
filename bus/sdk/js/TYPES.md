@@ -11,7 +11,7 @@ import type { SessionListResult, SessionSelfInfo } from '@sessionbus/kit/protoco
 JavaScript consumers can use JSDoc `import('@sessionbus/kit/protocol')` types.
 `Caller` methods reference these declarations for request and response shapes,
 including `list()` returning `Promise<SessionListResult>`. Existing JavaScript
-transport, validation and exports are unchanged. This is not a declaration of the
+methods retain their existing signatures. This is not a declaration of the
 entire SDK runtime API; projects checking JavaScript SDK implementation files can
 use TypeScript's `allowJs` and `maxNodeModuleJsDepth` (the package fixture checks
 `Caller` at depth 1).
@@ -72,3 +72,48 @@ releases each reservation once. These limits bound owned encoded payload, not
 JavaScript object overhead or process RSS; there is no preallocated buffer pool.
 For result/error replies, the owning peer or worker can still retire the connection
 under its existing failed-reply-write policy when admission rejects with `busy`.
+
+Transfer-capable connections additionally have four bulk correlations and four
+encoded bulk writes, including the one actually being written, bounded at 88 KiB
+each. Bulk does not consume the 256 ordinary slots. Request IDs are allocated at
+writer selection; eight control frames yield to one eligible bulk frame, with
+round-robin selection across transfer IDs. The one physical NDJSON frame already
+being written cannot be preempted. A stalled stream gives no finite latency bound.
+
+## Endpoint-local transfers
+
+Pass `transferExecutor` in `connectPeer`/`Worker` options to opt in. No default
+executor is provided. Its `openTransferSource(signal, path)` and
+`openTransferDestination(signal, path, overwrite)` must enforce the product's
+effective native filesystem policy on actual handles; a mode/cwd is no grant.
+`Transfers` can also be constructed for raw `Connection` owners. Register
+`handleConnectionRequest` before `helloObserved`, use a native identity lifetime
+signal, and join `closeConnectionGeneration` before disposing the executor.
+
+Source handles provide `size()`, `read(buffer, signal)` returning a byte count,
+`verify()` on the same handle, and `close()`. Destination handles provide
+`write(buffer, signal)` returning a byte count, `commit()` returning
+`{published: boolean, error?: Error}`, and `abort()`. Return
+`{published: false, error: ErrTransferCommitUnknown}` when native publication's
+answer is lost. An exception or malformed commit result is conservatively
+UNKNOWN. Confirmed publication remains completed even if cleanup fails. Abort
+must never retract a published destination. File/temp/checked-parent FDs in
+native children count within the aggregate four per transfer; child processes,
+pipes and JSON buffers need separately bounded adapter costs.
+
+`Caller.action` accepts `transfer.offer`, `transfer.request`, `transfer.accept`,
+`transfer.cancel` and `transfer.status`. Local source/destination/overwrite fields
+are intercepted by `Transfers`; paths never go to the generic RPC callback.
+For a raw caller, pass `{transfers}` to the `Caller` constructor. Offer/request
+only bind local paths: no handle is opened before acceptance. The generation
+owns submitted/accepted work independently of tool cancellation. Lost replies
+are never replay authority. Ordinary message/Run delivery supplies notices;
+`projectDelivery` captures the receiver-only destination on the reader and
+returns a function to invoke off-reader before normal delivery. It may wait for
+an already-in-flight publication fact, and never invokes filesystem work or wake.
+
+Pending bindings are limited to eight and preparing/accepted bindings to two
+across overlapping generations in one manager. Old cleanup remains charged
+while normal peer reconnection continues. UNKNOWN cleanup retains its charge
+until generation end; native executors must honour cancellation and bound their
+own resources. Generated wire DTOs contain no local filesystem path fields.

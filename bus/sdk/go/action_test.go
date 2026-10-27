@@ -99,7 +99,7 @@ func TestCallerActionRejectsInvalidInput(t *testing.T) {
 			}
 		})
 	}
-	if !reflect.DeepEqual(Actions, []string{"list", "send", "spawn", "describe", "trace", "run", "start", "wait", "status", "interrupt", "close", "forget", "ack"}) {
+	if !reflect.DeepEqual(Actions, []string{"list", "send", "spawn", "describe", "trace", "run", "start", "wait", "status", "interrupt", "close", "forget", "ack", "transfer.offer", "transfer.request", "transfer.accept", "transfer.cancel", "transfer.status"}) {
 		t.Fatalf("actions = %v", Actions)
 	}
 }
