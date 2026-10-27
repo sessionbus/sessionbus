@@ -3,7 +3,7 @@
 "use strict";
 const fs = require("node:fs/promises"), path = require("node:path");
 const { connectPeer } = require("./index.js");
-const [socket, role, ownPath] = process.argv.slice(2);
+const [socket, role, ownPath, mode] = process.argv.slice(2);
 let finish;
 const terminal = new Promise(resolve => { finish = resolve; });
 const executor = {
@@ -24,7 +24,7 @@ const peer = connectPeer({session_id:"js",product:"controlled-js-fixture",groups
  let notice;try{notice=JSON.parse(delivery.body);}catch{}
  if(notice?.kind==="terminal")finish(notice);
  return{disposition:"written"};
-},{SESSIONBUS_SOCKET:socket},{transferExecutor:executor,schedule:()=>{throw new Error("fixture must not reconnect");}});
+},{SESSIONBUS_SOCKET:socket},{transferExecutor:mode === "default" ? undefined : executor,schedule:()=>{throw new Error("fixture must not reconnect");}});
 (async () => {
  await peer.ready;
  if(role==="source") await peer.caller.action("transfer.offer",{target:"go@local",source:ownPath,name:path.basename(ownPath)});

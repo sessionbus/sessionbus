@@ -141,8 +141,8 @@ func TestOfferAndRequestSamePreparationStreamingEngine(t *testing.T) {
 			if _, err = e.Accept(other.ep.Key, protocol.TransferAccept{ID: d.ID}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err = e.Accept(other.ep.Key, protocol.TransferAccept{ID: d.ID}); err == nil {
-				t.Fatal("duplicate accept created a writer")
+			if duplicate, duplicateErr := e.Accept(other.ep.Key, protocol.TransferAccept{ID: d.ID}); duplicateErr != nil || duplicate.ID != d.ID || duplicate.State != "streaming" {
+				t.Fatal("live duplicate accept did not return its current descriptor", duplicate, duplicateErr)
 			}
 			credit, err := e.Chunk(source.ep.Key, protocol.TransferChunk{ID: d.ID, Data: base64.StdEncoding.EncodeToString([]byte("data"))})
 			if err != nil || credit.Offset != 4 {

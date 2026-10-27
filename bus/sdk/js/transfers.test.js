@@ -105,7 +105,7 @@ test("blocked prepare cancels outside handle lock and ordinary work is not disco
   assert.deepEqual(await f.client.call("session.list",{}),{sessions:[]}); assert.equal(f.transfers.active,0);
 });
 
-test("legacy empty hello and no executor refuse locally, preserving ordinary actions", { timeout: 2000 }, async t => {
+test("legacy daemon and unattached raw caller refuse transfers locally, preserving ordinary actions", { timeout: 2000 }, async t => {
   const f = fixture(t,noExecutor,async r => r.method === "session.hello" ? {} : {sessions:[]});
   await f.transfers.helloObserved(f.client,{session_id:"source@local",product:"test",groups:[],info:{}},f.scope.signal);
   assert.throws(() => f.transfers.offer({target:"destination@local",source:"/private/source",name:"file"}),/unsupported_transfer/);
@@ -114,11 +114,11 @@ test("legacy empty hello and no executor refuse locally, preserving ordinary act
   assert.deepEqual(await f.client.call("session.list",{}),{sessions:[]});
 });
 
-test("worker bootstrap only opts in for new daemon token and requires explicit executor", { timeout: 2000 }, async t => {
+test("default worker bootstrap opts in only with the versioned daemon token", { timeout: 2000 }, async t => {
   for (const token of ["legacy-random", "sbt1:random"]) {
     const [client, server] = pair(), got = deferred(); let bus;
     bus = new Connection(server,false,r => { got.resolve(r.params); void bus.result(r,{}); });
-    const worker = new Worker({hello:() => ({product:"fixture",supported_open_fields:[],extra_arguments:[]})},{SESSIONBUS_SOCKET:"fixture",SESSIONBUS_LAUNCH_TOKEN:token},{connect:() => client,transferExecutor:noExecutor});
+    const worker = new Worker({hello:() => ({product:"fixture",supported_open_fields:[],extra_arguments:[]})},{SESSIONBUS_SOCKET:"fixture",SESSIONBUS_LAUNCH_TOKEN:token},{connect:() => client});
     const serving = worker.serve().catch(error=>error), hello = await got.promise;
     assert.equal(hello.supports_transfer,token.startsWith("sbt1:")?true:undefined);
     worker.shutdown(); bus.close(); await serving;
@@ -137,4 +137,20 @@ test("source verification failure uses the fixed pre-finish machine failure with
  await f.bus.call("transfer.prepare",{id:"one",role:"source"});await f.bus.call("transfer.start",{id:"one",role:"source",size:sourceText.length,credit:262144});await failed.promise;
  assert.equal(f.incoming.some(r=>r.method==="transfer.cancel"||r.method==="transfer.finish"),false);
  assert.equal(JSON.stringify(f.incoming).includes("private native diagnostic"),false);
+});
+
+test("live accept keeps local path/overwrite binding and only the receiver chooses overwrite", { timeout: 2000 }, async t => {
+  const f = fixture(t, noExecutor, async r => {
+    if (r.method === "transfer.offer") return descriptor("one");
+    if (r.method === "transfer.accept") return descriptor("two");
+    throw new Error("unexpected request");
+  });
+  await f.transfers.offer({ target: "destination@local", source: "/local/source", name: "file" });
+  await assert.rejects(f.transfers.accept({ id: "one", path: "/local/other" }), /binding_conflict/);
+  await assert.rejects(f.transfers.accept({ id: "one", path: "/local/source", overwrite: true }), /binding_conflict/);
+  await f.bus.call("transfer.notice", { id: "two", kind: "offer", name: "file", from: { session_id: "sender@local", product: "fixture", groups: [] } });
+  await f.transfers.accept({ id: "two", path: "/local/destination", overwrite: false });
+  await assert.rejects(f.transfers.accept({ id: "two", path: "/local/different" }), /binding_conflict/);
+  await assert.rejects(f.transfers.accept({ id: "two", path: "/local/destination", overwrite: true }), /binding_conflict/);
+  assert.equal(f.incoming.filter(r => r.method === "transfer.accept").length, 1);
 });

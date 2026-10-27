@@ -89,7 +89,7 @@ func TestSDKFixturesAndPackageAllowlistUseProtocolAuthority(t *testing.T) {
 	}
 	want := map[string]bool{
 		"sdk/js/index.js": true, "sdk/js/connection.js": true, "sdk/js/caller.js": true,
-		"sdk/js/transfer-protocol.js": true, "sdk/js/transfers.js": true,
+		"sdk/js/transfer-protocol.js": true, "sdk/js/transfers.js": true, "sdk/js/transfer-filesystem.js": true,
 		"sdk/js/schema.js": true, "sdk/js/LICENSE": true, "sdk/go/protocol/session.schema.json": true,
 		"sdk/js/protocol.d.ts": true, "sdk/js/TYPES.md": true,
 	}

@@ -145,7 +145,7 @@ func (s *session) transferRequest(frame protocol.Frame, params any) {
 		other, err = s.transferTarget(p.Target)
 	}
 	if err != nil {
-		s.error(frame, protocol.UnsupportedOpen, "unsupported_transfer_scope")
+		s.error(frame, protocol.UnsupportedOpen, "unsupported_transfer")
 		return
 	}
 	reply := make(chan answer, 1)

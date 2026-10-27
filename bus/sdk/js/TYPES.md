@@ -82,23 +82,34 @@ being written cannot be preempted. A stalled stream gives no finite latency boun
 
 ## Endpoint-local transfers
 
-Pass `transferExecutor` in `connectPeer`/`Worker` options to opt in. No default
-executor is provided. Its `openTransferSource(signal, path)` and
-`openTransferDestination(signal, path, overwrite)` must enforce the product's
-effective native filesystem policy on actual handles; a mode/cwd is no grant.
-`Transfers` can also be constructed for raw `Connection` owners. Register
-`handleConnectionRequest` before `helloObserved`, use a native identity lifetime
-signal, and join `closeConnectionGeneration` before disposing the executor.
+`connectPeer` and `Worker` use the SDK's direct filesystem executor by default,
+as the current OS user in every product/mode. No native policy/mode mapping or
+permission-scope refusal is applied; real OS I/O failures remain failures. A raw
+`Connection` owner uses `new Transfers()`, registers `handleConnectionRequest`
+before `helloObserved`, supplies an identity-lifetime signal and joins
+`closeConnectionGeneration` on disposal. Custom `transferExecutor` options remain
+available for controlled integrations, without changing the default.
+
+The direct implementation reads a regular file and writes one random exclusive
+0600 sibling temp. No-replace publication uses atomic hard-link creation;
+explicit overwrite uses atomic rename, replacing the named directory entry.
+Normal OS symlinks are followed when opening the source/parent; there is no
+product sandbox. The parent is resolved once. Public Node fs lacks relative
+link/rename through a directory FD, so later parent replacement can make
+publication/owned-temp cleanup fail; this remains an explicit charged cleanup
+failure, never a claimed rollback or permission guarantee. No fsync/durability
+or immutable source snapshot is promised. File identity, size and modification
+time are checked on the same source handle after streaming.
 
 Source handles provide `size()`, `read(buffer, signal)` returning a byte count,
 `verify()` on the same handle, and `close()`. Destination handles provide
 `write(buffer, signal)` returning a byte count, `commit()` returning
 `{published: boolean, error?: Error}`, and `abort()`. Return
-`{published: false, error: ErrTransferCommitUnknown}` when native publication's
+`{published: false, error: ErrTransferCommitUnknown}` when publication's
 answer is lost. An exception or malformed commit result is conservatively
 UNKNOWN. Confirmed publication remains completed even if cleanup fails. Abort
 must never retract a published destination. File/temp/checked-parent FDs in
-native children count within the aggregate four per transfer; child processes,
+custom children count within the aggregate four per transfer; child processes,
 pipes and JSON buffers need separately bounded adapter costs.
 
 `Caller.action` accepts `transfer.offer`, `transfer.request`, `transfer.accept`,
@@ -115,5 +126,5 @@ an already-in-flight publication fact, and never invokes filesystem work or wake
 Pending bindings are limited to eight and preparing/accepted bindings to two
 across overlapping generations in one manager. Old cleanup remains charged
 while normal peer reconnection continues. UNKNOWN cleanup retains its charge
-until generation end; native executors must honour cancellation and bound their
+until generation end; custom executors must honour cancellation and bound their
 own resources. Generated wire DTOs contain no local filesystem path fields.

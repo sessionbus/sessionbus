@@ -49,12 +49,9 @@ func ConnectPeerContext(ctx context.Context, identity PeerIdentity, deliver Deli
 	return connectPeerContext(ctx, identity, deliver, nil)
 }
 
-// ConnectPeerWithTransfersContext opts into machine transfers only when the
-// supplied executor can enforce effective native permission on actual handles.
+// ConnectPeerWithTransfersContext selects a custom endpoint-local executor.
+// Nil uses the same direct filesystem default as ConnectPeerContext.
 func ConnectPeerWithTransfersContext(ctx context.Context, identity PeerIdentity, deliver DeliverFunc, executor TransferExecutor) (*Peer, error) {
-	if executor == nil {
-		return nil, ErrTransferScope
-	}
 	return connectPeerContext(ctx, identity, deliver, executor)
 }
 func connectPeerContext(ctx context.Context, identity PeerIdentity, deliver DeliverFunc, executor TransferExecutor) (*Peer, error) {
@@ -71,9 +68,7 @@ func connectPeerContext(ctx context.Context, identity PeerIdentity, deliver Deli
 	}
 	peerCtx, cancel := context.WithCancel(ctx)
 	p := &Peer{identity: identity, deliver: deliver, socket: socket, ctx: peerCtx, cancel: cancel, ready: make(chan struct{}), closed: make(chan struct{})}
-	if executor != nil {
-		p.Transfers = newTransfers(executor)
-	}
+	p.Transfers = newTransfers(executor)
 	p.Caller = NewCaller(p.Call)
 	p.Caller.transfers = p.Transfers
 	go p.connect()

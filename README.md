@@ -403,12 +403,14 @@ Cancellation stops only that wait and preserves the run/result handle for a
 later status or wait call. It does not interrupt the native run. Existing Go
 `Wait(request)` remains available without cancellation.
 
-Optional file transfers use the same connection and require an SDK-local native
-filesystem permission executor. Go provides `ConnectPeerWithTransfersContext`,
-`NewWorkerWithTransfers` and raw-connection hooks; JavaScript accepts a
-`transferExecutor` option or a raw `Transfers` manager. No default executor or
-implicit filesystem grant is installed. Offer/request bind local paths without
-opening a file until acceptance; inter-host bytes travel only through the hub.
+Negotiated file transfers use the same connection. Go and JavaScript SDKs use
+one direct filesystem implementation by default, as the current OS user in every
+product and mode. Products bind source/destination paths locally; there is no
+native permission mapping or extra inbox/outbox copy. Offer/request opens nothing
+until acceptance. The receiver uses one sibling temporary file and atomic
+publication, with no overwrite unless explicitly requested; inter-host bytes
+travel only through the hub. Go raw owners use `NewConnectionTransfers(nil)` and
+JavaScript raw owners use `new Transfers()` with the existing generation hooks.
 See [the negotiated protocol](bus/docs/PROTOCOL.md#16-negotiated-endpoint-local-file-transfers)
 and [JavaScript executor API](bus/sdk/js/TYPES.md#endpoint-local-transfers).
 

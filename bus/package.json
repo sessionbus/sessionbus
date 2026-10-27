@@ -13,6 +13,7 @@
     "sdk/js/connection.js",
     "sdk/js/transfer-protocol.js",
     "sdk/js/transfers.js",
+    "sdk/js/transfer-filesystem.js",
     "sdk/js/caller.js",
     "sdk/js/schema.js",
     "sdk/js/LICENSE",

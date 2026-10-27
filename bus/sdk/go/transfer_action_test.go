@@ -86,6 +86,25 @@ func TestTransferActionsNeverPassPathsToGenericCaller(t *testing.T) {
 	transfers.wait(wire)
 }
 
+func TestTransferAcceptRejectsChangedLocalPathOrOverwrite(t *testing.T) {
+	g, b, _ := localTransferBinding(t, nil)
+	g.owner.current = g
+	b.path = "/local/bound"
+	b.role = "destination"
+	for _, change := range []struct {
+		path      string
+		overwrite bool
+	}{{"/local/different", false}, {b.path, true}} {
+		if _, err := g.owner.Accept(context.Background(), b.id, change.path, change.overwrite); !errors.Is(err, ErrTransferBinding) {
+			t.Fatal("changed local binding reached RPC", err)
+		}
+	}
+	b.role = "source"
+	if _, err := g.owner.Accept(context.Background(), b.id, b.path, true); !errors.Is(err, ErrTransferBinding) {
+		t.Fatal("source chose receiver overwrite", err)
+	}
+}
+
 type latePublicationDestination struct {
 	entered, release chan struct{}
 	aborts           atomic.Int32

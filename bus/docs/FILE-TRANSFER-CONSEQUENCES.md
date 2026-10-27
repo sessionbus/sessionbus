@@ -8,11 +8,13 @@ host / 28 MiB hub controlled-buffer targets, dispatch-time request IDs, and
 objectives, not measured RSS, throughput, or product acceptance.
 
 The feature adds offer and request workflows on one memory-only engine. Paths,
-permission enforcement and files remain endpoint-local. A receiver's atomic
+files and the direct filesystem implementation remain endpoint-local. A receiver's atomic
 publication is the commit point. No terminal table, spool, reconnection replay,
-or assumed rollback after publication is introduced. Codex permission binding
-is a separate product change; absent an effective native executor the SDK
-refuses filesystem operations. A reported mode or lexical cwd is no grant.
+or assumed rollback after publication is introduced. Owner m07n/teqn supersedes
+the original no-grant requirement: the SDK default copies directly as the OS
+user in every product/mode. There is no product permission mapping, native
+command executor or permission-scope refusal; actual OS I/O errors remain.
+Tightening transfer permissions later is OPEN and is not a release gate.
 
 ## Preservation and affected lifetimes
 
@@ -82,7 +84,9 @@ bounded dispatch correlation is installed before the response is handled.
 
 Endpoint transfer opt-in is separate from public lane descriptions and native
 permissions. Peer SDKs reserve the existing info key; workers send the optional
-bit only with a versioned, full exact one-use launch token. Capabilities remain
+bit only with a versioned, full exact one-use launch token. Standard new SDK
+Peer/Worker owners now enable this negotiation by default; old SDKs retain their
+original non-opt-in behavior. Capabilities remain
 bound to authenticated attachment generations. A capability change cancels its
 old transfer generation without changing ordinary peer ownership semantics.
 
@@ -93,7 +97,7 @@ exact test-owned paths and are not native-policy enforcement acceptance. The
 review packet separately records race, capacity, codec and 1 GiB measurements;
 no test count or admission budget is a production memory/permission guarantee.
 
-Native adapters can return ErrTransferCommitUnknown when their publish command's
+Custom adapters can return ErrTransferCommitUnknown when publication's
 answer is lost. This is distinct from confirmed non-publication and confirmed
 publication (including post-publication cleanup failure). The SDK reports
 UNKNOWN and does not run destructive Abort or retry publication; its unknown
@@ -132,6 +136,43 @@ parity work in the already-public SDK; the daemon/hub remain native Go.
 The canonical protocol section is added to UNIVERSAL-SESSION-PROTOCOL.md from
 the architect-cleared contract and the generated bus protocol is regenerated
 verbatim. Historical frozen design/evidence artifacts are not rewritten. Final
-model-facing tool descriptions and the Codex native permission executor remain
-separate architecture/owner gates; this core candidate supplies no permission
-shortcut, product instruction or deployment authority.
+model-facing tool descriptions still require the owner's approval; no new tool
+text or deployment authority is supplied by this core candidate. The former
+native permission executor track is superseded, not an acceptance gate.
+
+## Owner-selected direct filesystem default and same-review contract fixes
+
+The default core implementation adds no runtime/dependency, process or extra
+inbox/outbox file. It opens regular sources nonblocking before fstat, checks the
+same handle after streaming, creates one random exclusive 0600 sibling temp and
+publishes via atomic hard link (no-replace) or explicit atomic rename (overwrite).
+Existing symlinks follow ordinary OS semantics; overwrite replaces the named
+entry. Go binds the destination parent FD and uses existing x/sys Unix relative
+operations. JavaScript uses public fs APIs and detects changed parent identity;
+a later directory rename/replacement may leave an explicitly reported owned-temp
+cleanup failure, never a silently successful cleanup. Default Go uses at most
+three filesystem FDs for both roles, JavaScript at most three. Cancellation
+closes owned handles/temp, never the published destination. Duplicate Commit
+cannot republish, and UNKNOWN/custom adapter behavior remains unchanged.
+
+DEV1 F1/F2 findings correct live duplicate accept and pending expiry. Concurrent
+same-binding accepts share the first preparation/start/holds and return its live
+descriptor; local path/overwrite conflicts, wrong generation/role and terminal
+IDs still reject. The author's previous error-expecting assertion was wrong and
+is replaced by sequential/concurrent adverse controls. Pending expiry emits the
+expired terminal enum, retaining ordinary notices, no hold and exact cleanup.
+
+DEV1 F3 corrects remote explicit-close and resettable deadline classification at
+the same phase lock: precommit close is cancelled; pending deadline is expired;
+preparing/streaming deadlines fail with their actual timeout reason; committing
+remains UNKNOWN unless exact completed finish knowledge is already retained. A
+confirmed receiver commit cannot be downgraded. Actual link/generation loss
+remains distinct. The engine uses the same phase-sensitive timeout rule and now
+classifies/assigns terminal knowledge under one record lock, avoiding a gap in
+which finish could enter committing after nonpublication was inferred. Existing
+resource joins and ordinary terminal/hold cleanup are preserved. Controlled
+phase/race tests are not claimed as physical lifecycle measurements.
+
+The previous 1GiB measurements remain exact e8df author evidence with controlled
+executors; the default-FS delta uses real Go/JavaScript filesystem interoperability
+and adverse filesystem tests, not a repeated or relabeled workload measurement.

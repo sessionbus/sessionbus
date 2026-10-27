@@ -22,7 +22,7 @@ import (
 )
 
 // This fixture grants only two exact test-owned paths. It demonstrates real
-// file/stream/publication behavior, NOT a production native policy executor.
+// file/stream/publication behavior, not the default filesystem executor.
 type fixtureTransferExecutor struct {
 	source, destination string
 	mu                  sync.Mutex
@@ -34,7 +34,7 @@ type fixtureTransferExecutor struct {
 
 func (x *fixtureTransferExecutor) OpenTransferSource(ctx context.Context, path string) (sessionkit.TransferSource, error) {
 	if x.deny || path != x.source {
-		return nil, sessionkit.ErrTransferScope
+		return nil, errors.New("fixture path rejected")
 	}
 	f, e := os.Open(path)
 	if e != nil {
@@ -52,7 +52,7 @@ func (x *fixtureTransferExecutor) OpenTransferSource(ctx context.Context, path s
 }
 func (x *fixtureTransferExecutor) OpenTransferDestination(ctx context.Context, path string, overwrite bool) (sessionkit.TransferDestination, error) {
 	if x.deny || path != x.destination || overwrite {
-		return nil, sessionkit.ErrTransferScope
+		return nil, errors.New("fixture path rejected")
 	}
 	f, e := os.CreateTemp(filepath.Dir(path), ".transfer-")
 	if e != nil {
@@ -124,7 +124,13 @@ func transferPeer(t *testing.T, socket, id string, executor sessionkit.TransferE
 	t.Helper()
 	t.Setenv("SESSIONBUS_SOCKET", socket)
 	notices := make(chan protocol.TransferNotice, 16)
-	p, e := sessionkit.ConnectPeerWithTransfersContext(context.Background(), sessionkit.PeerIdentity{Product: "fixture-client", SessionID: id, Name: id, Groups: []string{"shared"}, Info: map[string]any{}}, func(ctx context.Context, _ sessionkit.PeerIdentity, d sessionkit.DeliveryRequest) (sessionkit.DeliveryReceipt, error) {
+	connect := func(ctx context.Context, identity sessionkit.PeerIdentity, deliver sessionkit.DeliverFunc, selected sessionkit.TransferExecutor) (*sessionkit.Peer, error) {
+		if selected == nil {
+			return sessionkit.ConnectPeerContext(ctx, identity, deliver)
+		}
+		return sessionkit.ConnectPeerWithTransfersContext(ctx, identity, deliver, selected)
+	}
+	p, e := connect(context.Background(), sessionkit.PeerIdentity{Product: "fixture-client", SessionID: id, Name: id, Groups: []string{"shared"}, Info: map[string]any{}}, func(ctx context.Context, _ sessionkit.PeerIdentity, d sessionkit.DeliveryRequest) (sessionkit.DeliveryReceipt, error) {
 		var n protocol.TransferNotice
 		if json.Unmarshal([]byte(d.Body), &n) == nil && n.Kind != "" {
 			if fixture, ok := executor.(*fixtureTransferExecutor); ok && n.Kind == "terminal" {

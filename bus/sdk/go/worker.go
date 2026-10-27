@@ -97,20 +97,18 @@ type Worker struct {
 }
 
 func NewWorker(product WorkerCallbacks) *Worker {
-	worker := &Worker{product: product, dial: (&net.Dialer{}).DialContext, closed: make(chan struct{}), changed: make(chan struct{})}
+	worker := &Worker{transfers: newTransfers(nil), product: product, dial: (&net.Dialer{}).DialContext, closed: make(chan struct{}), changed: make(chan struct{})}
 	worker.caller = NewCaller(func(ctx context.Context, method string, params any) (result json.RawMessage, err error) {
 		err = worker.Call(ctx, method, params, &result)
 		return
 	})
+	worker.caller.transfers = worker.transfers
 	return worker
 }
 
-// NewWorkerWithTransfers adds the SDK-local executor without changing the
-// product's hello/describe contract or granting paths to a legacy daemon.
+// NewWorkerWithTransfers selects a custom executor. Nil uses the same direct
+// filesystem default as NewWorker, with negotiation unchanged for old daemons.
 func NewWorkerWithTransfers(product WorkerCallbacks, executor TransferExecutor) (*Worker, error) {
-	if executor == nil {
-		return nil, ErrTransferScope
-	}
 	w := NewWorker(product)
 	w.transfers = newTransfers(executor)
 	w.caller.transfers = w.transfers

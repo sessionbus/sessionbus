@@ -5,15 +5,11 @@ const { createHash } = require("node:crypto");
 const { basename } = require("node:path");
 const { CAPABILITY, CHUNK_BYTES, CREDIT_BYTES } = require("./transfer-protocol.js");
 const { validate } = require("./schema.js");
+const { FilesystemTransferExecutor } = require("./transfer-filesystem.js");
 
-// The native executor supplies checked handles. The SDK supplies no filesystem
-// implementation or implicit grant. Its async methods must honour the signal.
-// source: size(), read(buffer, signal) -> count, verify(), close().
-// destination: write(buffer, signal) -> count, commit() -> {published,error?},
-// abort(). commit(false, ErrTransferCommitUnknown) is never destructively aborted.
-// File/temp/checked-parent FDs, including native children, count toward the same
-// aggregate four/transfer. Child processes, control pipes and JSON have separate
-// executor-owned bounded costs; no mode/cwd is a permission grant.
+// Handles are endpoint-local. With no custom executor, the SDK reads/writes
+// directly as the OS user in every product/mode. Custom async methods honour
+// cancellation and the same aggregate four filesystem-FD budget.
 const ErrTransferCommitUnknown = new Error("transfer_commit_unknown");
 const unsupported = () => new Error("unsupported_transfer");
 const conflict = () => new Error("transfer_binding_conflict");
@@ -38,7 +34,8 @@ function locked(b, callback) {
 }
 
 class Transfers {
-  constructor(executor) {
+  constructor(executor = new FilesystemTransferExecutor()) {
+    executor ??= new FilesystemTransferExecutor();
     if (!executor || typeof executor.openTransferSource !== "function" || typeof executor.openTransferDestination !== "function") throw unsupported();
     this.executor = executor; this.pending = 0; this.active = 0; this.generations = new Set();
   }
@@ -106,7 +103,7 @@ class Transfers {
     if (signal?.aborted) return Promise.reject(signal.reason || new Error("aborted"));
     if (!pathValid(path)) return Promise.reject(conflict());
     const g = this._generation(), b = g.bindings.get(id);
-    if (!b || b.ended || b.path && (b.path !== path || b.overwrite !== overwrite)) return Promise.reject(conflict());
+    if (!b || b.ended || b.role === "source" && overwrite || b.path && (b.path !== path || b.overwrite !== overwrite)) return Promise.reject(conflict());
     b.path = path; b.overwrite = overwrite;
     if (b.role === "destination") b.destinationProjection = path;
     return waitSignal(g.wire.call("transfer.accept", { id }, g.controller.signal), signal);

@@ -38,7 +38,7 @@ class Run {
 class Worker {
   constructor(callbacks, env = process.env, options = {}) {
     this.callbacks = callbacks;
-    this.transfers = options.transferExecutor ? new Transfers(options.transferExecutor) : null;
+    this.transfers = new Transfers(options.transferExecutor);
     this.env = env;
     this.connect = options.connect || ((path) => net.createConnection(path));
     this.controller = new AbortController();
@@ -212,7 +212,7 @@ class Worker {
 
 class Peer {
   constructor(identity, deliver, env, options) {
-    this.transfers = options.transferExecutor ? new Transfers(options.transferExecutor) : null;
+    this.transfers = new Transfers(options.transferExecutor);
     this.identity = snapshot(identity);
     this.deliver = deliver;
     this.connect = options.connect || ((path) => net.createConnection(path));

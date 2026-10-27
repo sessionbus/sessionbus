@@ -20,15 +20,11 @@ import (
 	"github.com/antst/sessionbus/bus/sdk/go/protocol"
 )
 
-// TransferExecutor must enforce the current product's effective native policy,
-// including managed denies, on actual handles. A mode label, cwd or SDK opt-in
-// is not a grant. There is deliberately no default filesystem implementation.
-// Calls run off the RPC reader. Returned handles belong to this SDK generation.
-// Executors must honour ctx cancellation and account for their own subprocess
-// or pipe overhead; at most four filesystem FDs aggregate both roles may be
-// retained for one transfer (file/temp plus checked parents), including file
-// handles in native executor children. Native child processes and control pipes
-// are separately accounted overhead; child file FDs are not excluded.
+// TransferExecutor owns endpoint-local filesystem handles, off the RPC reader.
+// Nil selects FilesystemTransferExecutor, with direct current-user access in all
+// products/modes. Custom executors remain available for controlled integrations.
+// At most four filesystem FDs aggregate both roles may be retained per transfer;
+// custom processes, pipes and JSON have separately bounded costs.
 type TransferExecutor interface {
 	OpenTransferSource(context.Context, string) (TransferSource, error)
 	OpenTransferDestination(context.Context, string, bool) (TransferDestination, error)
@@ -57,7 +53,6 @@ type TransferDestination interface {
 	Abort() error
 }
 
-var ErrTransferScope = errors.New("unsupported_transfer_scope")
 var ErrTransferUnsupported = errors.New("unsupported_transfer")
 var ErrTransferBinding = errors.New("transfer_binding_conflict")
 var ErrTransferCommitUnknown = errors.New("transfer_commit_unknown")
@@ -114,6 +109,9 @@ type transferBinding struct {
 }
 
 func newTransfers(executor TransferExecutor) *Transfers {
+	if executor == nil {
+		executor = FilesystemTransferExecutor{}
+	}
 	return &Transfers{executor: executor, generations: map[*transferGeneration]struct{}{}}
 }
 func (t *Transfers) attach(wire *rpc.Conn, ctx context.Context, enabled bool) {
@@ -233,7 +231,7 @@ func (g *transferGeneration) end(b *transferBinding) {
 }
 func (g *transferGeneration) reserve(b *transferBinding) error {
 	if len(b.path) == 0 || len(b.path) > 4096 {
-		return ErrTransferScope
+		return ErrTransferBinding
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -395,7 +393,7 @@ func (t *Transfers) Accept(ctx context.Context, id, path string, overwrite bool)
 		return protocol.TransferDescriptor{}, err
 	}
 	if len(path) == 0 || len(path) > 4096 {
-		return protocol.TransferDescriptor{}, ErrTransferScope
+		return protocol.TransferDescriptor{}, ErrTransferBinding
 	}
 	g, e := t.generation()
 	if e != nil {
@@ -408,6 +406,10 @@ func (t *Transfers) Accept(ctx context.Context, id, path string, overwrite bool)
 		return protocol.TransferDescriptor{}, ErrTransferBinding
 	}
 	b.mu.Lock()
+	if b.role == "source" && overwrite {
+		b.mu.Unlock()
+		return protocol.TransferDescriptor{}, ErrTransferBinding
+	}
 	if b.path != "" && (b.path != path || b.overwrite != overwrite) {
 		b.mu.Unlock()
 		return protocol.TransferDescriptor{}, ErrTransferBinding
@@ -498,8 +500,6 @@ func (g *transferGeneration) handle(r *rpc.Request) {
 }
 func transferReason(err error) string {
 	switch {
-	case errors.Is(err, ErrTransferScope):
-		return "unsupported_scope"
 	case errors.Is(err, ErrTransferBinding):
 		return "binding_conflict"
 	case errors.Is(err, context.Canceled):
@@ -548,9 +548,6 @@ func (g *transferGeneration) prepare(p protocol.TransferPrepare) (protocol.Trans
 	b.active = true
 	g.owner.mu.Unlock()
 	g.mu.Unlock()
-	if g.owner.executor == nil {
-		return protocol.TransferPrepared{}, ErrTransferScope
-	}
 	ctx := b.ctx
 	if p.Role == "source" {
 		source, err := g.owner.executor.OpenTransferSource(ctx, b.path)
@@ -753,8 +750,8 @@ func (g *transferGeneration) notice(p protocol.TransferNotice) (struct{}, error)
 	return struct{}{}, nil
 }
 
-// Join SDK-owned cleanup before native product disposal. This does
-// not make a permission executor that ignores cancellation safe or supported.
+// Join SDK-owned cleanup before product disposal. Custom executors must honour
+// cancellation and close their owned resources.
 func (t *Transfers) wait(wire *rpc.Conn) {
 	if t == nil {
 		return
@@ -776,12 +773,9 @@ func (t *Transfers) wait(wire *rpc.Conn) {
 }
 
 // NewConnectionTransfers supports brokers that own a raw Connection and their
-// own identity lifecycle instead of Peer. The executor remains SDK-local and
-// must enforce native policy. Register HandleConnectionRequest before hello.
+// own identity lifecycle instead of Peer. Nil uses the direct filesystem
+// default. Register HandleConnectionRequest before hello.
 func NewConnectionTransfers(executor TransferExecutor) (*Transfers, error) {
-	if executor == nil {
-		return nil, ErrTransferScope
-	}
 	return newTransfers(executor), nil
 }
 
@@ -791,7 +785,7 @@ func NewConnectionTransfers(executor TransferExecutor) (*Transfers, error) {
 // generation must be the native identity lifetime, not a tool invocation.
 func (t *Transfers) HelloObserved(ctx, generation context.Context, wire *Connection, identity PeerIdentity, seen func() error) error {
 	if t == nil || generation == nil {
-		return ErrTransferScope
+		return ErrTransferBinding
 	}
 	hello := identity
 	hello.Protocol = 1

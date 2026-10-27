@@ -842,9 +842,9 @@ and closes the connection without writing one.
 ### 1.6 Negotiated endpoint-local file transfers
 
 Transfers are optional `transfer/1` machine traffic on the existing connection.
-The Go and JavaScript SDKs require an explicit native filesystem executor;
-neither a capability, a product name, a mode nor a cwd grants file access.
-Source/destination paths and overwrite permission remain local to that executor.
+The Go and JavaScript SDKs default to direct filesystem access as the current
+OS user in every product/mode, with no native permission mapping. Products bind
+source/destination paths and the receiver's overwrite choice locally.
 The daemon and hub never open files, spool content or receive path fields.
 
 ### Compatibility and identity
@@ -853,13 +853,13 @@ A capable peer SDK reserves `info.sessionbus_transfer:1` in its existing hello.
 A new daemon returns `{capabilities:["transfer/1"]}` only to an opting-in
 endpoint. An old daemon returns `{}`; ordinary operations remain available and
 transfer operations refuse locally. Non-opting endpoints continue to receive
-the legacy empty hello result. Product-supplied info is not permission proof.
+the legacy empty hello result. The reserved bit negotiates transport only.
 
 Workers have no info object. A capable daemon prefixes its opaque random launch
 token with `sbt1:`. A new SDK sends `supports_transfer:true` only with that prefix
-and an explicit executor. Old workers echo the token unchanged, omit the bit and
+from the default-enabled SDK. Old workers echo the token unchanged, omit the bit and
 receive `{}`. The entire random token and product claim are still checked and
-consumed once. The prefix itself is neither authentication nor a filesystem grant.
+consumed once. The prefix itself is not authentication.
 
 Federation negotiates `sessionbus-transfer/1` as a superset of the existing
 wake/trace/roster capabilities. Both legs must negotiate it before endpoint
@@ -899,7 +899,7 @@ the path binding on the reader before any later callback. The tool's cancelled
 wait or lost response neither cancels admitted work nor authorizes a retry.
 
 Both workflows use one engine: prepare source once, obtain its same-handle stat,
-prepare the permitted destination/temp, acquire both generation-bound lane
+prepare the destination/temp, acquire both generation-bound lane
 holds, acknowledge destination start, then start the source automatically.
 Filesystem work never runs in the reader/observed-result callback. Partial
 activation retires its own resources once; uncertain cleanup remains charged.
@@ -924,14 +924,14 @@ The conservative controlled-data reservations are 21 MiB/host and 28 MiB/hub:
 host pending `64*3*16KiB`, active `4*3*1.5MiB`; hub pending `256*16KiB`, active
 `16*1.5MiB`. Endpoint stages are subsets, never added twice. These are controlled
 transfer-data budgets, not process RSS: existing ordinary socket readers/control
-queues, runtime overhead and native-executor processes/pipes are separate.
-Filesystem FDs are at most four aggregate per transfer across both roles,
-including native children, and sixteen per host. Executors must bound their own
-additional process, pipe and JSON costs. There is no default production executor.
+queues and runtime overhead are separate. Filesystem FDs are at most four
+aggregate per transfer across both roles and sixteen per host. The default uses
+one source handle plus one destination temp/parent pair, with no subprocess or
+pipes. Custom executors must separately bound any additional costs.
 
 Atomic no-replace/overwrite publication is the receiver's commit point. A
 confirmed publication with failed temp cleanup remains completed. Confirmed
-nonpublication can fail/cancel and remove its temp. Lost native publish
+nonpublication can fail/cancel and remove its temp. Lost publish
 confirmation is UNKNOWN: no destructive Abort, late deletion or publication
 retry. Receiver-local publication knowledge and remote UNKNOWN remain distinct.
 Checksums establish received bytes, not an immutable source snapshot or fsync

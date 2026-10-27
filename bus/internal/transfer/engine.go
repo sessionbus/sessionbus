@@ -43,6 +43,7 @@ type endpointUsage struct{ pending, active int }
 type record struct {
 	expires                      time.Time
 	creationQueued               chan struct{}
+	acceptDone                   chan struct{}
 	active                       bool
 	mu                           sync.Mutex
 	io                           sync.Mutex
@@ -158,7 +159,7 @@ func (e *Engine) create(creator, other Endpoint, offer bool, name, what string, 
 		u.pending++
 		e.endpoints[p.Key] = u
 	}
-	r.timer = time.AfterFunc(e.pendingTTL, func() { r.terminate("failed", "expired", false) })
+	r.timer = time.AfterFunc(e.pendingTTL, func() { r.terminate("expired", "expired", false) })
 	go func() {
 		select {
 		case <-r.source.Done:
@@ -279,13 +280,40 @@ func (e *Engine) Accept(actor string, p protocol.TransferAccept) (protocol.Trans
 		return protocol.TransferDescriptor{}, ErrUnknown
 	}
 	if r.accepting {
+		done := r.acceptDone
+		r.mu.Unlock()
+		select {
+		case <-done:
+		case <-r.ctx.Done():
+			return protocol.TransferDescriptor{}, ErrUnknown
+		}
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.ended {
+			return protocol.TransferDescriptor{}, ErrUnknown
+		}
+		if p.Size != nil && (r.descriptor.Size == nil || *p.Size != *r.descriptor.Size) {
+			return protocol.TransferDescriptor{}, ErrState
+		}
+		return cloneDescriptor(r.descriptor), nil
+	}
+	if r.descriptor.State != "offered" && r.descriptor.State != "requested" {
 		r.mu.Unlock()
 		return protocol.TransferDescriptor{}, ErrState
 	}
 	r.accepting = true
-	if r.descriptor.State != "offered" && r.descriptor.State != "requested" {
+	r.acceptDone = make(chan struct{})
+	r.mu.Unlock()
+	defer close(r.acceptDone)
+	return e.prepareAccepted(r, p)
+}
+
+func (e *Engine) prepareAccepted(r *record, p protocol.TransferAccept) (protocol.TransferDescriptor, error) {
+	var err error
+	r.mu.Lock()
+	if r.ended {
 		r.mu.Unlock()
-		return protocol.TransferDescriptor{}, ErrState
+		return protocol.TransferDescriptor{}, ErrUnknown
 	}
 	e.mu.Lock()
 	for _, ep := range []Endpoint{r.source, r.destination} {
@@ -542,15 +570,27 @@ func (r *record) terminate(outcome, reason string, uncertain bool) {
 		r.mu.Unlock()
 		return
 	}
+	if reason == "expired" {
+		switch r.descriptor.State {
+		case "preparing":
+			outcome, reason = "failed", "prepare_timeout"
+		case "streaming":
+			outcome, reason = "failed", "progress_timeout"
+		case "committing":
+			outcome, reason = "unknown", "commit_unconfirmed"
+		}
+	}
 	if r.descriptor.State == "committing" || uncertain {
 		outcome = "unknown"
 	}
 	result := protocol.TransferTerminal{ID: r.descriptor.ID, Outcome: outcome, Bytes: protocol.Integer(r.bytes), Reason: reason}
-	r.mu.Unlock()
-	r.finishTerminal(result)
+	r.finishTerminalLocked(result)
 }
 func (r *record) finishTerminal(result protocol.TransferTerminal) {
 	r.mu.Lock()
+	r.finishTerminalLocked(result)
+}
+func (r *record) finishTerminalLocked(result protocol.TransferTerminal) {
 	if r.ended {
 		r.mu.Unlock()
 		return

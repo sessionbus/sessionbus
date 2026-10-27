@@ -23,7 +23,7 @@ func (x *blockingTransferExecutor) OpenTransferSource(ctx context.Context, _ str
 	return nil, ctx.Err()
 }
 func (x *blockingTransferExecutor) OpenTransferDestination(context.Context, string, bool) (TransferDestination, error) {
-	return nil, ErrTransferScope
+	return nil, errors.New("fixture path rejected")
 }
 
 type unknownTransferDestination struct{ aborts atomic.Int32 }

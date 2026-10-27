@@ -40,6 +40,7 @@ type bridgeBinding struct {
 	timer                  *time.Timer
 	held, ended            bool
 	retired                chan struct{}
+	confirmed              *protocol.TransferTerminal
 }
 
 func newTransferBridge(d *Daemon, link *federationLink, ctx context.Context) *transferBridge {
@@ -133,7 +134,7 @@ func (b *transferBridge) bind(ctx context.Context, p federation.TransferBind) (f
 	}
 	b.tokens[token] = entry
 	entry.timer = time.AfterFunc(10*time.Minute, func() {
-		_ = entry.terminal(protocol.TransferNotice{ID: entry.transferID(), Kind: "terminal", Outcome: "expired", Reason: "expired"})
+		_ = entry.terminal(protocol.TransferNotice{Kind: "terminal", Reason: "deadline_elapsed"})
 	})
 	b.mu.Unlock()
 
@@ -181,6 +182,30 @@ func (x *bridgeBinding) terminal(n protocol.TransferNotice) error {
 			return nil
 		default:
 			return transfer.ErrState
+		}
+	}
+	// Classify local close/deadline while holding the SAME phase lock used to
+	// enter committing. Transport loss keeps its separate UNKNOWN projection.
+	if x.confirmed != nil {
+		known := x.confirmed
+		n.Outcome, n.Reason, n.Bytes, n.SHA256 = known.Outcome, known.Reason, &known.Bytes, known.SHA256
+	} else if n.Reason == "endpoint_closing" || n.Reason == "deadline_elapsed" {
+		if x.phase == "committing" {
+			n.Outcome = "unknown"
+			if n.Reason == "deadline_elapsed" {
+				n.Reason = "commit_unconfirmed"
+			}
+		} else if n.Reason == "endpoint_closing" {
+			n.Outcome = "cancelled"
+		} else {
+			switch x.phase {
+			case "pending":
+				n.Outcome, n.Reason = "expired", "expired"
+			case "preparing":
+				n.Outcome, n.Reason = "failed", "prepare_timeout"
+			default:
+				n.Outcome, n.Reason = "failed", "progress_timeout"
+			}
 		}
 	}
 	x.ended = true
@@ -394,6 +419,9 @@ func (b *transferBridge) server(ctx context.Context, method string, raw json.Raw
 		}
 		var terminal protocol.TransferTerminal
 		err = entry.endpoint.Call(ctx, method, p, &terminal)
+		if err == nil {
+			entry.observeCommit(*p, terminal)
+		}
 		value = terminal
 	default:
 		err = transfer.ErrUnsupported
@@ -463,6 +491,9 @@ func (b *transferBridge) forward(ctx context.Context, actor string, method strin
 		entry.mu.Unlock()
 	}
 	err = b.call(ctx, method, params, result)
+	if err == nil && method == "transfer.finish" {
+		entry.observeCommit(*params.(*protocol.TransferFinish), *result.(*protocol.TransferTerminal))
+	}
 	if err == nil && method == "transfer.chunk" {
 		entry.mu.Lock()
 		if !entry.ended {
@@ -471,6 +502,14 @@ func (b *transferBridge) forward(ctx context.Context, actor string, method strin
 		entry.mu.Unlock()
 	}
 	return result, err
+}
+func (x *bridgeBinding) observeCommit(p protocol.TransferFinish, result protocol.TransferTerminal) {
+	if result.Outcome != "completed" || result.ID != p.ID || result.Bytes != p.Bytes || result.SHA256 != p.SHA256 {
+		return
+	}
+	x.mu.Lock()
+	x.confirmed = &result
+	x.mu.Unlock()
 }
 func (b *transferBridge) endEndpoint(key string) {
 	b.mu.Lock()
@@ -483,7 +522,7 @@ func (b *transferBridge) endEndpoint(key string) {
 	b.mu.Unlock()
 	for _, entry := range all {
 		go func(x *bridgeBinding) {
-			_ = x.terminal(protocol.TransferNotice{Kind: "terminal", Outcome: "unknown", Reason: "endpoint_closing"})
+			_ = x.terminal(protocol.TransferNotice{Kind: "terminal", Reason: "endpoint_closing"})
 		}(entry)
 	}
 }
