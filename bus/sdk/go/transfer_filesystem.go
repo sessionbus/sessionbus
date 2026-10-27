@@ -21,6 +21,8 @@ import (
 // atomic no-replace unless the receiver explicitly selected overwrite.
 type FilesystemTransferExecutor struct{}
 
+var errTransferNoReplaceUnsupported = errors.New("atomic no-replace publication unsupported")
+
 func (FilesystemTransferExecutor) OpenTransferSource(ctx context.Context, path string) (TransferSource, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -105,7 +107,7 @@ func (FilesystemTransferExecutor) OpenTransferDestination(ctx context.Context, p
 		_ = parent.Close()
 		return nil, err
 	}
-	d := &filesystemTransferDestination{ctx: ctx, parent: parent, file: os.NewFile(uintptr(tempFD), temp), name: name, temp: temp, overwrite: overwrite}
+	d := &filesystemTransferDestination{ctx: ctx, parent: parent, file: os.NewFile(uintptr(tempFD), temp), name: name, temp: temp, overwrite: overwrite, link: unix.Linkat, renameNoReplace: renameTransferNoReplace}
 	if err = ctx.Err(); err != nil {
 		return nil, errors.Join(err, d.Abort())
 	}
@@ -120,6 +122,8 @@ type filesystemTransferDestination struct {
 	overwrite, attempted, published bool
 	aborted                         bool
 	commitErr                       error
+	link                            func(int, string, int, string, int) error
+	renameNoReplace                 func(int, string, int, string) error
 }
 
 func (d *filesystemTransferDestination) Write(raw []byte) (int, error) {
@@ -150,16 +154,24 @@ func (d *filesystemTransferDestination) Commit() (bool, error) {
 		return false, d.commitErr
 	}
 	fd := int(d.parent.Fd())
+	moved := d.overwrite
 	if d.overwrite {
 		d.commitErr = unix.Renameat(fd, d.temp, fd, d.name)
 	} else {
-		d.commitErr = unix.Linkat(fd, d.temp, fd, d.name, 0)
+		d.commitErr = d.link(fd, d.temp, fd, d.name, 0)
+		if unsupportedTransferHardlink(d.commitErr) {
+			d.commitErr = d.renameNoReplace(fd, d.temp, fd, d.name)
+			moved = d.commitErr == nil
+			if unsupportedTransferRename(d.commitErr) {
+				d.commitErr = errors.Join(errTransferNoReplaceUnsupported, d.commitErr)
+			}
+		}
 	}
 	if d.commitErr != nil {
 		return false, d.commitErr
 	}
 	d.published = true
-	if d.overwrite {
+	if moved {
 		d.temp = ""
 	} else {
 		d.commitErr = unix.Unlinkat(fd, d.temp, 0)

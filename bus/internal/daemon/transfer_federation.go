@@ -31,6 +31,7 @@ type bridgeBinding struct {
 	armed                  bool
 	bridge                 *transferBridge
 	mu                     sync.Mutex
+	holds                  sync.WaitGroup
 	token, id, role, phase string
 	endpoint               transfer.Endpoint
 	reservation            *transfer.Reservation
@@ -210,7 +211,13 @@ func (x *bridgeBinding) terminal(n protocol.TransferNotice) error {
 	}
 	x.ended = true
 	x.timer.Stop()
-	id, held := x.id, x.held
+	id := x.id
+	x.mu.Unlock()
+	// No new hold can enter after ended. Join existing owner round-trips
+	// outside mu so a shared-reader ingress gate never waits on that owner.
+	x.holds.Wait()
+	x.mu.Lock()
+	held := x.held
 	x.mu.Unlock()
 	var err error
 	if id != "" {
@@ -336,14 +343,25 @@ func (b *transferBridge) server(ctx context.Context, method string, raw json.Raw
 			break
 		}
 		entry.mu.Lock()
-		held := false
-		if !entry.ended {
-			held = entry.endpoint.Hold(ctx, p.ID, p.Terminal)
-			if held {
-				entry.held = !p.Terminal
-			}
+		if entry.ended {
+			entry.mu.Unlock()
+			value = federation.TransferHeld{Held: false}
+			break
+		}
+		entry.holds.Add(1)
+		if !p.Terminal {
+			// Even a lost/refused response can follow an applied owner event.
+			// Keep the release obligation until a positive terminal reply.
+			entry.held = true
 		}
 		entry.mu.Unlock()
+		held := entry.endpoint.Hold(ctx, p.ID, p.Terminal)
+		entry.mu.Lock()
+		if held {
+			entry.held = !p.Terminal
+		}
+		entry.mu.Unlock()
+		entry.holds.Done()
 		value = federation.TransferHeld{Held: held}
 	case *federation.TransferNoticeRoute:
 		var entry *bridgeBinding

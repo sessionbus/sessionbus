@@ -223,20 +223,26 @@ func (s *hubState) handle(ctx context.Context, inbox chan<- registryEvent, event
 		frame := *event.transfer
 		p, err := decodeTransferParams(TransferCreateMethod, frame.value.Params)
 		if err != nil {
-			s.transfers.reply(event.link, frame, nil, err)
+			if !s.transfers.reply(event.link, frame, nil, err) {
+				s.remove(event.link)
+			}
 			return
 		}
 		input := p.(*TransferCreate)
 		sourceHost, _ := suffix(input.From.SessionID)
 		targetHost, _ := suffix(input.Target)
 		if sourceHost != event.link.host || input.From.SourceAttachment != "" {
-			s.transfers.reply(event.link, frame, nil, errFrame)
+			if !s.transfers.reply(event.link, frame, nil, errFrame) {
+				s.remove(event.link)
+			}
 			return
 		}
 		origin, destination := event.link, s.links[targetHost]
 		go func() {
 			value, err := s.transfers.create(origin, destination, *input)
-			s.transfers.reply(origin, frame, value, err)
+			if !s.transfers.reply(origin, frame, value, err) {
+				origin.wire.Close()
+			}
 		}()
 	case registryRoster:
 		s.roster(ctx, inbox, event.link, event.id)

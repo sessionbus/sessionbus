@@ -114,6 +114,10 @@ func ServeDaemonWithTransfers(ctx context.Context, host string, fd net.Conn, inb
 				continue
 			}
 		case OutgoingCall:
+			if callCount(pending, queued, false) >= protocol.MaxOperations {
+				event.Reply <- errorReply(protocol.ForwardLost, nil)
+				continue
+			}
 			request := event.Value.Request
 			if request.Completion && !wakeCapable {
 				event.Reply <- errorReply(protocol.ForwardLost, nil)

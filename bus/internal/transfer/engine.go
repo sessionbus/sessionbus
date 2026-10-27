@@ -41,26 +41,26 @@ type Engine struct {
 }
 type endpointUsage struct{ pending, active int }
 type record struct {
-	expires                      time.Time
-	creationQueued               chan struct{}
-	acceptDone                   chan struct{}
-	active                       bool
-	mu                           sync.Mutex
-	io                           sync.Mutex
-	inFlight                     sync.WaitGroup
-	engine                       *Engine
-	ctx                          context.Context
-	cancel                       context.CancelFunc
-	descriptor                   protocol.TransferDescriptor
-	source, destination, creator Endpoint
-	what                         string
-	reservation                  *Reservation
-	timer                        *time.Timer
-	announced, accepting, ended  bool
-	sourceHeld, destinationHeld  bool
-	bytes                        int64
-	terminal                     protocol.TransferTerminal
-	stage                        Stage
+	expires                                   time.Time
+	creationQueued                            chan struct{}
+	acceptDone                                chan struct{}
+	active                                    bool
+	mu                                        sync.Mutex
+	io                                        sync.Mutex
+	inFlight                                  sync.WaitGroup
+	engine                                    *Engine
+	ctx                                       context.Context
+	cancel                                    context.CancelFunc
+	descriptor                                protocol.TransferDescriptor
+	source, destination, creator              Endpoint
+	what                                      string
+	reservation                               *Reservation
+	timer                                     *time.Timer
+	announced, accepting, ended               bool
+	sourceHoldStarted, destinationHoldStarted bool
+	bytes                                     int64
+	terminal                                  protocol.TransferTerminal
+	stage                                     Stage
 }
 
 func NewEngine(ctx context.Context, budget *Budget) *Engine {
@@ -373,20 +373,34 @@ func (e *Engine) prepareAccepted(r *record, p protocol.TransferAccept) (protocol
 	r.descriptor.Size = src.Size
 	r.mu.Unlock()
 
-	// Hold activation and terminal accounting serialize on this record. The
-	// preparation deadline bounds a missing owner event without changing socket
-	// timeouts or turning an ambiguous accepted call into cancellation evidence.
+	// Admit activation under the terminal gate, but never wait for an owner
+	// round-trip with that gate locked: the owner can itself be closing us.
+	// Terminal cleanup joins this lease before inspecting/releasing late grants.
 	holdCtx, stopHold := context.WithTimeout(r.ctx, e.prepareTTL)
 	defer stopHold()
 	r.mu.Lock()
-	if !r.ended {
-		r.sourceHeld = r.source.Hold(holdCtx, p.ID, false)
+	if r.ended {
+		r.mu.Unlock()
+		return protocol.TransferDescriptor{}, ErrState
 	}
-	if r.sourceHeld && !r.ended {
-		r.destinationHeld = r.destination.Hold(holdCtx, p.ID, false)
-	}
-	ready := !r.ended && r.sourceHeld && r.destinationHeld
+	r.inFlight.Add(1)
+	r.sourceHoldStarted = true
 	r.mu.Unlock()
+	sourceHeld := r.source.Hold(holdCtx, p.ID, false)
+	r.mu.Lock()
+	activateDestination := sourceHeld && !r.ended
+	if activateDestination {
+		r.destinationHoldStarted = true
+	}
+	r.mu.Unlock()
+	destinationHeld := false
+	if activateDestination {
+		destinationHeld = r.destination.Hold(holdCtx, p.ID, false)
+	}
+	r.mu.Lock()
+	ready := !r.ended && sourceHeld && destinationHeld
+	r.mu.Unlock()
+	r.inFlight.Done()
 	if !ready {
 		r.terminate("failed", "participant_closing", false)
 		return protocol.TransferDescriptor{}, ErrState
@@ -637,9 +651,11 @@ func (r *record) finishTerminalLocked(result protocol.TransferTerminal) {
 				case <-r.engine.ctx.Done():
 				}
 				r.mu.Lock()
-				held := r.sourceHeld
+				// A cancelled/lost Hold reply does not prove its queued owner
+				// event never applied. Terminal release is idempotent by ID.
+				held := r.sourceHoldStarted
 				if participant.Key == r.destination.Key {
-					held = r.destinationHeld
+					held = r.destinationHoldStarted
 				}
 				r.mu.Unlock()
 				if held {

@@ -156,7 +156,14 @@ func TestRawConnectionTransferHookNegotiatesWithoutLegacyProbe(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			identity := PeerIdentity{Product: "fixture", SessionID: "raw", Groups: []string{"test"}, Info: map[string]any{}}
-			if err = transfers.HelloObserved(ctx, wire.Context(), wire, identity, func() error { observed.Store(true); return nil }); err != nil || !opted.Load() {
+			if err = transfers.HelloObserved(ctx, wire.Context(), wire, identity, func() error {
+				_, readyErr := transfers.generation()
+				if capable && readyErr != nil || !capable && !errors.Is(readyErr, ErrTransferUnsupported) {
+					t.Error("identity observer published before usable negotiated generation", readyErr)
+				}
+				observed.Store(true)
+				return nil
+			}); err != nil || !opted.Load() {
 				t.Fatal("hello negotiation", err)
 			}
 			if !capable {
@@ -175,5 +182,54 @@ func TestRawConnectionTransferHookNegotiatesWithoutLegacyProbe(t *testing.T) {
 				t.Fatal("ordinary call lost", err)
 			}
 		})
+	}
+}
+
+func TestRejectedHelloObserverDoesNotDisableANewerConnection(t *testing.T) {
+	left, right := net.Pipe()
+	successorLocal, successorRemote := net.Pipe()
+	wire := NewConnection(left, func(context.Context, *Request) {})
+	successor := NewConnection(successorLocal, func(context.Context, *Request) {})
+	var server *rpc.Conn
+	server = rpc.New(right, false, func(_ context.Context, r *rpc.Request) {
+		go func() {
+			_ = server.Result(r, protocol.HelloResult{Capabilities: []string{protocol.TransferCapability}})
+		}()
+	})
+	transfers, _ := NewConnectionTransfers(nil)
+	defer func() {
+		_ = wire.Close()
+		_ = server.Close()
+		_ = successor.Close()
+		_ = successorRemote.Close()
+		transfers.CloseConnectionGeneration(wire)
+		transfers.CloseConnectionGeneration(successor)
+	}()
+	rejected := errors.New("stale identity rejected")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := transfers.HelloObserved(ctx, wire.Context(), wire, PeerIdentity{Product: "fixture", SessionID: "raw", Groups: []string{"test"}}, func() error {
+		// The observer can release its broker mutex while another identity wins.
+		transfers.attach(successor, successor.Context(), true)
+		return rejected
+	})
+	if !errors.Is(err, rejected) {
+		t.Fatal("observer refusal lost", err)
+	}
+	g, err := transfers.generation()
+	if err != nil || g.wire != successor {
+		t.Fatal("stale observer disabled newer usable generation", g, err)
+	}
+
+	stale, cancelStale := context.WithCancel(context.Background())
+	cancelStale()
+	for _, enabled := range []bool{true, false} {
+		if transfers.attach(wire, stale, enabled) != nil {
+			t.Fatal("cancelled identity attached")
+		}
+		current, err := transfers.generation()
+		if err != nil || current != g {
+			t.Fatal("cancelled identity displaced current generation", current, err)
+		}
 	}
 }

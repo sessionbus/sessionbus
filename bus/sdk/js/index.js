@@ -9,6 +9,7 @@ const { ACTIONS, Caller } = require("./caller.js");
 const { Connection, ProtocolError } = require("./connection.js");
 const { schema, validate, encode } = require("./schema.js");
 const { Transfers, ErrTransferCommitUnknown } = require("./transfers.js");
+const { TOKEN_PREFIX, CAPABILITY } = require("./transfer-protocol.js");
 
 const ENV = ["SESSIONBUS_LAUNCH_TOKEN", "SESSIONBUS_LOCAL_KEY", "SESSIONBUS_SOCKET"];
 const never = new Promise(() => {});
@@ -59,9 +60,9 @@ class Worker {
       const stream = this.connect(socket);
       this.connection = new Connection(stream, true, (request) => this._handle(request));
       this.connection.signal.addEventListener("abort", () => this.controller.abort(this.connection.signal.reason), { once: true });
-      const supportsTransfer = this.transfers && token.startsWith("sbt1:");
+      const supportsTransfer = this.transfers && token.startsWith(TOKEN_PREFIX);
       await this.connection.call("session.hello", { protocol: 1, launch_token: token, ...hello, ...(supportsTransfer ? { supports_transfer: true } : {}) }, this.controller.signal, result => {
-        this.transfers?.attach(this.connection, this.controller.signal, supportsTransfer && result.capabilities?.includes("transfer/1") === true);
+        this.transfers?.attach(this.connection, this.controller.signal, supportsTransfer && result.capabilities?.includes(CAPABILITY) === true);
       }); cause = await this.connection.done; throw cause;
     } finally { this.run?.finish?.(); try { await this.transfers?.closeConnectionGeneration(); await this._closeProduct(); } finally { this.finish(cause); } }
   }
@@ -257,7 +258,7 @@ class Peer {
   }
   async _hello(connection, identity = this.identity, acknowledged) { for (;;) { let installed = false; const info = { ...identity.info }; delete info.sessionbus_transfer; if (this.transfers) info.sessionbus_transfer = 1; const result = await connection.call("session.hello", { protocol: 1, ...identity, info }, undefined, helloResult => {
     if (this.wire !== connection || this.terminal) throw new Error("not connected");
-    if (identity === this.identity) { if (this.admitted?.session_id !== identity.session_id || !this.identityController || this.identityController.signal.aborted) this.identityController = new AbortController(); this.admitted = identity; this.connection = connection; this.transfers?.attach(connection, this.identityController.signal, helloResult.capabilities?.includes("transfer/1") === true); installed = true; }
+    if (identity === this.identity) { if (this.admitted?.session_id !== identity.session_id || !this.identityController || this.identityController.signal.aborted) this.identityController = new AbortController(); this.admitted = identity; this.connection = connection; this.transfers?.attach(connection, this.identityController.signal, helloResult.capabilities?.includes(CAPABILITY) === true); installed = true; }
   }); if (installed) { acknowledged?.(); return result; } identity = this.identity; } }
   _lost(connection) { if (this.wire !== connection || this.terminal) return; this.wire = null; this.connection = null; this.admitted = null; this.identityController?.abort(connection.signal.reason); this.identityController = null; this.caller.disconnected(); this.schedule(() => { this.ready = this._open(); }, 2000); }
   _failHello(error, connection) { if (!(error instanceof ProtocolError) || error.code !== -32602) return false; this.terminal = true; this.error = error; this.wire = null; this.connection = null; this.identityController?.abort(error); this.identityController = null; this.admitted = null; this.caller.disconnected(); connection.close(); this.finish(); return true; }

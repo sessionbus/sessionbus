@@ -154,3 +154,12 @@ test("live accept keeps local path/overwrite binding and only the receiver choos
   await assert.rejects(f.transfers.accept({ id: "two", path: "/local/destination", overwrite: true }), /binding_conflict/);
   assert.equal(f.incoming.filter(r => r.method === "transfer.accept").length, 1);
 });
+
+test("unsupported JS hard-link publication fails clearly without UNKNOWN", { timeout: 2000 }, async t => {
+ const f=fixture(t,{...noExecutor,openTransferDestination:async()=>({write:raw=>raw.length,commit:()=>({published:false,error:Object.assign(new Error("unsupported link"),{code:"ENOTSUP"})}),abort:()=>{}})},async r=>descriptor(r.params.id));
+ await incomingDestination(f);
+ await f.bus.call("transfer.chunk",{id:"one",offset:0,data:sourceText.toString("base64")});
+ const result=await f.bus.call("transfer.finish",{id:"one",bytes:sourceText.length,sha256:hash});
+ assert.equal(result.outcome,"failed");assert.equal(result.reason,"atomic_no_replace_unsupported");
+ await f.bus.call("transfer.notice",{kind:"terminal",...result});
+});

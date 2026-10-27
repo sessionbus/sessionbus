@@ -3,7 +3,7 @@
 
 const { createHash } = require("node:crypto");
 const { basename } = require("node:path");
-const { CAPABILITY, CHUNK_BYTES, CREDIT_BYTES } = require("./transfer-protocol.js");
+const { CAPABILITY, CHUNK_BYTES, CREDIT_BYTES, MAX_PENDING, MAX_ACTIVE, MAX_BYTES } = require("./transfer-protocol.js");
 const { validate } = require("./schema.js");
 const { FilesystemTransferExecutor } = require("./transfer-filesystem.js");
 
@@ -73,7 +73,7 @@ class Transfers {
   }
   _reserve(g, b, hasPath = true) {
     if (g.controller.signal.aborted || hasPath && !pathValid(b.path)) throw conflict();
-    if (this.pending >= 8) throw new Error("transfer_busy");
+    if (this.pending >= MAX_PENDING) throw new Error("transfer_busy");
     this.pending++;
     b.controller = new AbortController();
     b.abort = () => b.controller.abort(g.controller.signal.reason);
@@ -158,12 +158,12 @@ class Transfers {
           if (b.prepareAttempted) { if (b.prepareError) throw b.prepareError; return this._prepared(b); }
           b.prepareAttempted = true;
           try {
-            if (this.active >= 2 || g.controller.signal.aborted) throw conflict();
+            if (this.active >= MAX_ACTIVE || g.controller.signal.aborted) throw conflict();
             this.pending--; this.active++; b.active = true;
             if (b.role === "source") {
               b.source = await this.executor.openTransferSource(b.controller.signal, b.path);
               b.size = await b.source.size();
-              if (!Number.isSafeInteger(b.size) || b.size < 0 || b.size > (1 << 30)) throw conflict();
+              if (!Number.isSafeInteger(b.size) || b.size < 0 || b.size > MAX_BYTES) throw conflict();
             } else {
               if (p.size === undefined) throw conflict();
               b.size = p.size; b.destination = await this.executor.openTransferDestination(b.controller.signal, b.path, b.overwrite); b.hash = createHash("sha256");
@@ -194,7 +194,7 @@ class Transfers {
             if (!result || typeof result.published !== "boolean") result = { published: false, error: ErrTransferCommitUnknown };
             b.published = result.published;
             if (!b.published && result.error === ErrTransferCommitUnknown) { b.commitUnknown = true; return { id: b.id, outcome: "unknown", bytes: b.offset, reason: "publication_unconfirmed" }; }
-            if (!b.published) return { id: b.id, outcome: "failed", bytes: b.offset, reason: "publication_failed" };
+            if (!b.published) return { id: b.id, outcome: "failed", bytes: b.offset, reason: ["ENOTSUP", "EOPNOTSUPP"].includes(result.error?.code) ? "atomic_no_replace_unsupported" : "publication_failed" };
             b.publication = { id: b.id, outcome: "completed", bytes: b.offset, sha256: p.sha256, ...(result.error ? { reason: "committed_cleanup_failed" } : {}) };
             return b.publication;
           } finally { b.commitFinished.resolve(); }

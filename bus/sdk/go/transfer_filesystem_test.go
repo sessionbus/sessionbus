@@ -226,3 +226,151 @@ func TestDefaultTransferManagersHaveDirectFilesystemExecutor(t *testing.T) {
 		}
 	}
 }
+
+func TestNoReplaceUnsupportedHardlinkUsesPinnedAtomicRename(t *testing.T) {
+	for _, item := range []struct {
+		name                    string
+		linkError, renameError  error
+		existing                bool
+		wantPublish, wantRename bool
+	}{
+		{name: "unsupported-link", linkError: unix.EOPNOTSUPP, wantPublish: true, wantRename: true},
+		{name: "unsupported-link-existing", linkError: unix.EOPNOTSUPP, existing: true, wantRename: true},
+		{name: "existing-link-error", linkError: unix.EEXIST, existing: true},
+		{name: "generic-link-error", linkError: unix.EIO},
+		{name: "unsupported-both", linkError: unix.EOPNOTSUPP, renameError: unix.ENOSYS, wantRename: true},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			dir := t.TempDir()
+			target := filepath.Join(dir, "target")
+			if item.existing {
+				if err := os.WriteFile(target, []byte("original"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			handle, err := (FilesystemTransferExecutor{}).OpenTransferDestination(context.Background(), target, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := handle.(*filesystemTransferDestination)
+			if _, err = io.WriteString(d, "whole"); err != nil {
+				t.Fatal(err)
+			}
+			parentFD := int(d.parent.Fd())
+			renamed := false
+			d.link = func(fromFD int, from string, toFD int, to string, flags int) error {
+				if fromFD != parentFD || toFD != parentFD || from != d.temp || to != d.name || flags != 0 {
+					t.Error("link escaped pinned directory")
+				}
+				return item.linkError
+			}
+			d.renameNoReplace = func(fromFD int, from string, toFD int, to string) error {
+				renamed = true
+				if fromFD != parentFD || toFD != parentFD || from != d.temp || to != d.name {
+					t.Error("rename escaped pinned directory")
+				}
+				if item.renameError != nil {
+					return item.renameError
+				}
+				return renameTransferNoReplace(fromFD, from, toFD, to)
+			}
+			published, err := d.Commit()
+			if published != item.wantPublish || renamed != item.wantRename {
+				t.Fatal("publication/fallback", published, renamed, err)
+			}
+			if published && err != nil || !published && err == nil {
+				t.Fatal("publication reason", err)
+			}
+			if item.renameError == unix.ENOSYS && !errors.Is(err, errTransferNoReplaceUnsupported) {
+				t.Fatal("unsupported fallback not identified", err)
+			}
+			if item.existing && !errors.Is(err, unix.EEXIST) {
+				t.Fatal("existing target not preserved", err)
+			}
+			if err = d.Abort(); err != nil {
+				t.Fatal(err)
+			}
+			raw, readErr := os.ReadFile(target)
+			if item.existing {
+				if readErr != nil || string(raw) != "original" {
+					t.Fatal("clobbered", string(raw), readErr)
+				}
+			} else if item.wantPublish {
+				if readErr != nil || string(raw) != "whole" {
+					t.Fatal(string(raw), readErr)
+				}
+			} else if !errors.Is(readErr, os.ErrNotExist) {
+				t.Fatal("failed publication created file", readErr)
+			}
+			assertNoTransferTemps(t, dir)
+		})
+	}
+}
+
+func TestFallbackNoReplaceRaceUsesOriginalDirectoryAfterRename(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "parent")
+	if err := os.Mkdir(parent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(parent, "target")
+	var handles []*filesystemTransferDestination
+	for _, text := range []string{"one whole file", "another whole file"} {
+		handle, err := (FilesystemTransferExecutor{}).OpenTransferDestination(context.Background(), target, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d := handle.(*filesystemTransferDestination)
+		d.link = func(int, string, int, string, int) error { return unix.EOPNOTSUPP }
+		if _, err = io.WriteString(d, text); err != nil {
+			t.Fatal(err)
+		}
+		handles = append(handles, d)
+	}
+	moved := parent + "-moved"
+	if err := os.Rename(parent, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(parent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("replacement folder marker"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var workers sync.WaitGroup
+	workers.Add(len(handles))
+	winners := make(chan bool, len(handles))
+	for _, d := range handles {
+		go func(d *filesystemTransferDestination) {
+			defer workers.Done()
+			published, err := d.Commit()
+			if !published && !errors.Is(err, unix.EEXIST) || published && err != nil {
+				t.Error("atomic fallback", published, err)
+			}
+			winners <- published
+			if err = d.Abort(); err != nil {
+				t.Error(err)
+			}
+		}(d)
+	}
+	workers.Wait()
+	close(winners)
+	count := 0
+	for ok := range winners {
+		if ok {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatal("wrong publication count", count)
+	}
+	raw, err := os.ReadFile(filepath.Join(moved, "target"))
+	if err != nil || string(raw) != "one whole file" && string(raw) != "another whole file" {
+		t.Fatal(string(raw), err)
+	}
+	raw, err = os.ReadFile(target)
+	if err != nil || string(raw) != "replacement folder marker" {
+		t.Fatal("path redirected publication", string(raw), err)
+	}
+	assertNoTransferTemps(t, parent)
+	assertNoTransferTemps(t, moved)
+}

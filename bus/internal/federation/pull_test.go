@@ -27,7 +27,7 @@ func testSecret(fill byte) string {
 
 func testHub(t *testing.T) (*Hub, string, map[string]string) {
 	t.Helper()
-	secrets := map[string]string{"alpha": testSecret('a'), "beta": testSecret('b')}
+	secrets := map[string]string{"alpha": testSecret('a'), "beta": testSecret('b'), "gamma": testSecret('c')}
 	configuration, err := ServerTLS(secrets)
 	if err != nil {
 		t.Fatal(err)
@@ -190,11 +190,20 @@ func TestDuplicateKeepsIncumbentAndDestinationClosesOn257th(t *testing.T) {
 		t.Fatalf("incumbent roster = %#v", hosts)
 	}
 	params, _ := protocol.EncodeParams("turn.run", protocol.TurnRunRequest{SessionID: "lane@beta", Input: "go"})
+	gamma := connectTestDaemon(t, address, "gamma", secrets["gamma"], func(IncomingCall) (Wait, error) { return immediate(Reply{}), nil })
+	_ = callHosts(t, gamma)
 	replies := make([]chan Reply, 257)
 	caller := Caller{SessionID: "sender@alpha", Name: "sender@alpha", Product: "peer", PrivateGroup: "session:sender@alpha", Groups: []string{"session:sender@alpha"}}
 	for index := range replies {
 		replies[index] = make(chan Reply, 1)
-		alpha.inbox <- OutgoingCall{Value: Forward{From: caller, Request: PublicRequest{Method: "turn.run", Params: params}}, Reply: replies[index]}
+		origin, from := alpha, caller
+		if index == 256 {
+			// A distinct authenticated origin isolates the hub destination cap from
+			// the source daemon's independent 256-operation admission bound.
+			origin = gamma
+			from = Caller{SessionID: "sender@gamma", Name: "sender@gamma", Product: "peer", PrivateGroup: "session:sender@gamma", Groups: []string{"session:sender@gamma"}}
+		}
+		origin.inbox <- OutgoingCall{Value: Forward{From: from, Request: PublicRequest{Method: "turn.run", Params: params}}, Reply: replies[index]}
 		// Fill the destination pending table, not the independent bounded
 		// origin outbox. The last request must overflow before beta dispatch.
 		if index < 256 {
@@ -221,7 +230,7 @@ func TestDuplicateKeepsIncumbentAndDestinationClosesOn257th(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("overflow did not close destination")
 	}
-	if hosts := callHosts(t, alpha); len(hosts) != 0 {
+	if hosts := callHosts(t, alpha); len(hosts) != 1 || hosts[0] != "gamma" {
 		t.Fatalf("closed destination remained in roster: %#v", hosts)
 	}
 }

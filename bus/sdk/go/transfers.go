@@ -114,26 +114,37 @@ func newTransfers(executor TransferExecutor) *Transfers {
 	}
 	return &Transfers{executor: executor, generations: map[*transferGeneration]struct{}{}}
 }
-func (t *Transfers) attach(wire *rpc.Conn, ctx context.Context, enabled bool) {
+func (t *Transfers) attach(wire *rpc.Conn, ctx context.Context, enabled bool) *transferGeneration {
 	if !enabled {
 		t.mu.Lock()
+		if ctx.Err() != nil || wire.Context().Err() != nil {
+			t.mu.Unlock()
+			return nil
+		}
 		old := t.current
 		t.current = nil
 		t.mu.Unlock()
 		if old != nil {
 			old.cancel()
 		}
-		return
+		return nil
 	}
 	child, cancel := context.WithCancel(ctx)
 	stopWire := context.AfterFunc(wire.Context(), cancel)
 	g := &transferGeneration{finished: make(chan struct{}), owner: t, wire: wire, ctx: child, cancel: cancel, enabled: enabled, bindings: map[string]*transferBinding{}}
 	t.mu.Lock()
-	if t.current != nil && t.current.wire == wire && t.current.enabled == enabled && t.current.ctx.Err() == nil {
+	if ctx.Err() != nil || wire.Context().Err() != nil {
 		t.mu.Unlock()
 		cancel()
 		stopWire()
-		return
+		return nil
+	}
+	if t.current != nil && t.current.wire == wire && t.current.enabled == enabled && t.current.ctx.Err() == nil {
+		current := t.current
+		t.mu.Unlock()
+		cancel()
+		stopWire()
+		return current
 	}
 	old := t.current
 	t.current = g
@@ -151,6 +162,7 @@ func (t *Transfers) attach(wire *rpc.Conn, ctx context.Context, enabled bool) {
 		delete(t.generations, g)
 		t.mu.Unlock()
 	}()
+	return g
 }
 func (t *Transfers) generation() (*transferGeneration, error) {
 	if t == nil {
@@ -708,7 +720,11 @@ func (g *transferGeneration) finish(p protocol.TransferFinish) (protocol.Transfe
 		return protocol.TransferTerminal{ID: b.id, Outcome: "unknown", Bytes: p.Bytes, Reason: "publication_unconfirmed"}, nil
 	}
 	if !published {
-		return protocol.TransferTerminal{ID: b.id, Outcome: "failed", Bytes: protocol.Integer(b.offset), Reason: "publication_failed"}, nil
+		reason := "publication_failed"
+		if errors.Is(err, errTransferNoReplaceUnsupported) {
+			reason = "atomic_no_replace_unsupported"
+		}
+		return protocol.TransferTerminal{ID: b.id, Outcome: "failed", Bytes: protocol.Integer(b.offset), Reason: reason}, nil
 	}
 	r := protocol.TransferTerminal{ID: b.id, Outcome: "completed", Bytes: p.Bytes, SHA256: p.SHA256}
 	if err != nil {
@@ -808,10 +824,8 @@ func (t *Transfers) HelloObserved(ctx, generation context.Context, wire *Connect
 	hello.Info[protocol.TransferInfoKey] = 1
 	var result protocol.HelloResult
 	return wire.CallObserved(ctx, "session.hello", hello, &result, func() error {
-		if seen != nil {
-			if err := seen(); err != nil {
-				return err
-			}
+		if err := generation.Err(); err != nil {
+			return err
 		}
 		enabled := false
 		for _, c := range result.Capabilities {
@@ -819,7 +833,25 @@ func (t *Transfers) HelloObserved(ctx, generation context.Context, wire *Connect
 				enabled = true
 			}
 		}
-		t.attach(wire, generation, enabled)
+		attached := t.attach(wire, generation, enabled)
+		if enabled && attached == nil {
+			return ErrTransferUnsupported
+		}
+		if seen != nil {
+			if err := seen(); err != nil {
+				// Reject only this observed generation, never a newer connection
+				// admitted while the product observer was running.
+				if attached != nil {
+					t.mu.Lock()
+					if t.current == attached {
+						t.current = nil
+					}
+					t.mu.Unlock()
+					attached.cancel()
+				}
+				return err
+			}
+		}
 		return nil
 	})
 }

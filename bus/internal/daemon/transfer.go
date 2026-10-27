@@ -32,7 +32,7 @@ func (d *directory) setTransferCapability(item *entry, enabled bool) {
 	if item.transferCapable == enabled && item.transferDone != nil {
 		return
 	}
-	if item.transferDone != nil {
+	if item.transferCapable && item.transferDone != nil {
 		close(item.transferDone)
 	}
 	item.transferCapable = enabled

@@ -91,7 +91,11 @@ before `helloObserved`, supplies an identity-lifetime signal and joins
 available for controlled integrations, without changing the default.
 
 The direct implementation reads a regular file and writes one random exclusive
-0600 sibling temp. No-replace publication uses atomic hard-link creation;
+0600 sibling temp. JS no-replace publication uses atomic hard-link creation;
+filesystems without hard links fail with `atomic_no_replace_unsupported`
+(ENOTSUP/EOPNOTSUPP), without an overwrite downgrade or rename fallback.
+The Go SDK may use descriptor-relative atomic no-replace rename on Linux/Darwin
+when hard links are unsupported; unsupported atomic rename also fails clearly.
 explicit overwrite uses atomic rename, replacing the named directory entry.
 Normal OS symlinks are followed when opening the source/parent; there is no
 product sandbox. The parent is resolved once. Public Node fs lacks relative

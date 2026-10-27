@@ -329,10 +329,17 @@ func (h *hubTransfers) action(origin *hostLink, method string, params any) (any,
 func (h *hubTransfers) submit(link *hostLink, frame connTransferFrame) {
 	params, err := decodeTransferParams(frame.value.Method, frame.value.Params)
 	if err != nil {
-		h.reply(link, frame, nil, err)
+		if !h.reply(link, frame, nil, err) {
+			link.wire.Close()
+		}
 		return
 	}
-	go func() { value, err := h.action(link, frame.value.Method, params); h.reply(link, frame, value, err) }()
+	go func() {
+		value, err := h.action(link, frame.value.Method, params)
+		if !h.reply(link, frame, value, err) {
+			link.wire.Close()
+		}
+	}()
 }
 
 type connTransferFrame struct {
@@ -340,20 +347,25 @@ type connTransferFrame struct {
 	release func()
 }
 
-func (h *hubTransfers) reply(link *hostLink, frame connTransferFrame, value any, err error) {
+func (h *hubTransfers) reply(link *hostLink, frame connTransferFrame, value any, err error) bool {
 	reply := transferReply(value, err)
 	event := originReply{id: frame.value.ID, value: reply, origin: link, destination: link, release: frame.release}
 	select {
-	case link.inbox <- event:
 	case <-link.done:
-		if frame.release != nil {
-			frame.release()
-		}
 	case <-h.ctx.Done():
-		if frame.release != nil {
-			frame.release()
+	default:
+		// This can run on that inbox's own owner or the registry. Never wait
+		// for capacity from either loop; the caller applies normal overload close.
+		select {
+		case link.inbox <- event:
+			return true
+		default:
 		}
 	}
+	if frame.release != nil {
+		frame.release()
+	}
+	return false
 }
 
 func (b *hubTransferBinding) retire() {
