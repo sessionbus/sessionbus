@@ -422,7 +422,17 @@ func (e *Engine) prepareAccepted(r *record, p protocol.TransferAccept) (protocol
 	r.mu.Unlock()
 	credit := protocol.Integer(protocol.TransferCreditBytes)
 	if err = r.source.Call(r.ctx, "transfer.start", protocol.TransferStart{ID: p.ID, Role: "source", Size: *src.Size, Credit: &credit}, &start); err != nil || start.ID != p.ID || !start.Started {
-		r.terminate("unknown", "source_start_unconfirmed", true)
+		r.mu.Lock()
+		if r.ended {
+			// Acceptance already activated both participants. Its own terminal
+			// can cancel the start reply; report that fact through the normal
+			// notice without retroactively rejecting the admission snapshot.
+			r.mu.Unlock()
+			return result, nil
+		}
+		// Arbitrate against a concurrent authoritative terminal under the same
+		// gate. A genuinely unconfirmed start still fails without replay.
+		r.finishTerminalLocked(protocol.TransferTerminal{ID: p.ID, Outcome: "unknown", Bytes: protocol.Integer(r.bytes), Reason: "source_start_unconfirmed"})
 		return protocol.TransferDescriptor{}, ErrState
 	}
 	return result, nil

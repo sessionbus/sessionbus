@@ -67,20 +67,21 @@ test("destination refuses wrong offset/digest without write or publish; one comm
   await assert.rejects(f.bus.call("transfer.finish", { id: "one", bytes: sourceText.length, sha256: hash }), { code: -32603 });
   const delivery = { message_id: "transfer-notice-one", body: JSON.stringify({ kind: "terminal", ...complete }) };
   const project = f.transfers.projectDelivery(f.client, delivery);
-  await project(undefined, delivery); assert.equal(JSON.parse(delivery.body).destination,"/local/destination");
+  const projection = project(undefined, delivery);
   await f.bus.call("transfer.notice", { kind: "terminal", ...complete });
+  await projection; assert.equal(JSON.parse(delivery.body).destination,"/local/destination");
   assert.equal(commits,1); assert.equal(aborts,1); assert.equal(f.transfers.active,0); assert.deepEqual(Buffer.concat(captured),sourceText);
 });
 
-test("unconfirmed publication never aborts/retries or releases accepted charge early", { timeout: 2000 }, async t => {
+test("unconfirmed publication retires its terminal slot without abort or retry", { timeout: 2000 }, async t => {
   let commits = 0, aborts = 0;
   const f = fixture(t, { ...noExecutor, openTransferDestination: async () => ({ write: raw => raw.length, commit: () => { commits++; return { published: false, error: ErrTransferCommitUnknown }; }, abort: () => { aborts++; } }) }, async r => descriptor(r.params.id));
   await incomingDestination(f);
   await f.bus.call("transfer.chunk", { id: "one", offset: 0, data: sourceText.toString("base64") });
   const unknown = await f.bus.call("transfer.finish", { id: "one", bytes: sourceText.length, sha256: hash });
   assert.equal(unknown.outcome,"unknown");
-  await assert.rejects(f.bus.call("transfer.notice", { kind: "terminal", ...unknown }), { code: -32603 });
-  assert.equal(f.transfers.active,1); assert.equal(aborts,0); assert.equal(commits,1);
+  await f.bus.call("transfer.notice", { kind: "terminal", ...unknown });
+  assert.equal(f.transfers.active,0); assert.equal(aborts,0); assert.equal(commits,1);
   f.scope.abort(); await f.transfers.closeConnectionGeneration(); assert.equal(f.transfers.active,0); assert.equal(aborts,0);
 });
 
@@ -92,7 +93,8 @@ test("late confirmed publication upgrades only captured receiver notice off read
   const delivery = { message_id: "transfer-notice-one", body: JSON.stringify({ kind:"terminal", id:"one", outcome:"unknown",bytes:sourceText.length,reason:"link_lost" }) };
   const project = f.transfers.projectDelivery(f.client,delivery); let projected = false;
   const projection = project(undefined,delivery).then(() => { projected = true; });
-  await Promise.resolve(); assert.equal(projected,false); release.resolve(); await finish; await projection;
+  await Promise.resolve(); assert.equal(projected,false); release.resolve(); const confirmed = await finish;
+  await f.bus.call("transfer.notice", { kind:"terminal", ...confirmed }); await projection;
   assert.equal(JSON.parse(delivery.body).outcome,"completed"); assert.equal(JSON.parse(delivery.body).sha256,hash);
 });
 
@@ -180,3 +182,57 @@ for (const code of ["ENOTSUP", "EOPNOTSUPP"]) {
   await f.bus.call("transfer.notice",{kind:"terminal",...result});
  });
 }
+
+test("closed-handle cleanup errors retire terminal slots and project a receiver-only residue basename", { timeout: 2000 }, async t => {
+  const temp = ".sessionbus-transfer-" + "a".repeat(32) + ".tmp";
+  for (const published of [false, true]) {
+    let aborts = 0;
+    const failure = Object.assign(new Error("closed-handle cleanup"), { leftoverTemp: temp });
+    const f = fixture(t, { ...noExecutor, openTransferDestination: async () => ({ write: raw => raw.length, commit: () => ({ published, ...(published ? { error: failure } : {}) }), abort: () => { aborts++; throw failure; } }) }, async r => r.method === "session.list" ? { sessions:[] } : descriptor(r.params.id));
+    await incomingDestination(f);
+    await f.bus.call("transfer.chunk", { id:"one", offset:0, data:sourceText.toString("base64") });
+    const terminal = await f.bus.call("transfer.finish", { id:"one", bytes:sourceText.length, sha256:hash });
+    assert.equal(terminal.outcome, published ? "completed" : "failed");
+    assert.equal(JSON.stringify(terminal).includes(temp), false);
+    const delivery = { message_id:"transfer-notice-one", body:JSON.stringify({kind:"terminal",...terminal}) };
+    const projection = f.transfers.projectDelivery(f.client,delivery)(undefined,delivery);
+    await f.bus.call("transfer.notice",{kind:"terminal",...terminal}); await projection;
+    assert.equal(f.transfers.active,0); assert.equal(f.transfers.pending,0); assert.equal(aborts,1);
+    const local=JSON.parse(delivery.body);assert.equal(local.outcome,terminal.outcome);assert.match(local.reason,/cleanup_failed/);assert.ok(local.reason.includes(temp));
+    assert.equal(local.destination,"/local/destination"); assert.equal(f.transfers.current.bindings.size,0);
+    assert.deepEqual(await f.client.call("session.list",{}),{ sessions:[] });
+  }
+});
+
+test("terminal cleanup ACK and quota wait for admitted work without blocking ordinary replies", { timeout: 2000 }, async t => {
+ const joined=deferred();
+ const f=fixture(t,{...noExecutor,openTransferDestination:async()=>({write:raw=>raw.length,commit:()=>({published:false}),abort:()=>{throw new Error("closed-handle residue");}})},async r=>r.method==="session.list"?{sessions:[]}:descriptor(r.params.id));
+ await incomingDestination(f);
+ const binding=f.transfers.current.bindings.get("one");binding.worker=joined.promise;
+ let acknowledged=false;
+ const notice=f.bus.call("transfer.notice",{kind:"terminal",id:"one",outcome:"failed",bytes:0,reason:"fixture_failure"}).then(()=>{acknowledged=true;return null;},error=>error);
+ try {
+  await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(acknowledged,false);assert.equal(f.transfers.active,1);
+  assert.deepEqual(await f.client.call("session.list",{}),{sessions:[]});
+ } finally {joined.resolve();}
+ assert.equal(await notice,null);
+ assert.equal(f.transfers.active,0);assert.equal(f.transfers.current.bindings.size,0);
+});
+
+test("late accepted snapshot cannot recreate a terminally retired local binding", { timeout: 2000 }, async t => {
+  let aborts = 0;
+  const f = fixture(t, { ...noExecutor, openTransferDestination: async () => ({ write: raw => raw.length, commit: () => ({ published:false }), abort: () => { aborts++; } }) }, async r => {
+    assert.equal(r.method,"transfer.accept");
+    await f.bus.call("transfer.prepare",{id:"one",role:"destination",size:0});
+    await f.bus.call("transfer.start",{id:"one",role:"destination",size:0});
+    await f.bus.call("transfer.notice",{kind:"terminal",id:"one",outcome:"failed",bytes:0,reason:"source_changed"});
+    assert.equal(f.transfers.active,0); assert.equal(f.transfers.pending,0);
+    return {...descriptor("one"),state:"streaming",size:0};
+  });
+  await f.bus.call("transfer.notice",{kind:"offer",id:"one",name:"file",from:{session_id:"source@local",product:"fixture",groups:[]}});
+  assert.equal((await f.transfers.accept({id:"one",path:"/local/destination"})).state,"streaming");
+  assert.equal(f.transfers.current.bindings.size,0); assert.equal(aborts,1);
+  await assert.rejects(f.transfers.accept({id:"one",path:"/local/destination"}),/transfer_binding_conflict/);
+  assert.equal(f.incoming.length,1);
+});

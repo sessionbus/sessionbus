@@ -98,11 +98,11 @@ func TestTransferUnknownNativePublicationNeverAbortsOrRetries(t *testing.T) {
 	if err != nil || result.Outcome != "unknown" {
 		t.Fatal(result, err)
 	}
-	if _, err = g.notice(protocol.TransferNotice{ID: b.id, Kind: "terminal", Outcome: "unknown"}); !errors.Is(err, ErrTransferCommitUnknown) {
+	if _, err = g.notice(protocol.TransferNotice{ID: b.id, Kind: "terminal", Outcome: "unknown"}); err != nil {
 		t.Fatal("UNKNOWN lost", err)
 	}
-	if dest.aborts.Load() != 0 || g.owner.active != 1 {
-		t.Fatal("destructive abort/early release after UNKNOWN")
+	if dest.aborts.Load() != 0 || g.owner.active != 0 || !errors.Is(b.cleanupError, ErrTransferCommitUnknown) {
+		t.Fatal("UNKNOWN fact lost, destructive abort or terminal slot retained")
 	}
 	cancel()
 	g.shutdown()
@@ -231,5 +231,60 @@ func TestRejectedHelloObserverDoesNotDisableANewerConnection(t *testing.T) {
 		if err != nil || current != g {
 			t.Fatal("cancelled identity displaced current generation", current, err)
 		}
+	}
+}
+
+type closedCleanupErrorDestination struct{ aborts atomic.Int32 }
+
+func (*closedCleanupErrorDestination) Write(b []byte) (int, error) { return len(b), nil }
+func (*closedCleanupErrorDestination) Commit() (bool, error) {
+	return true, errors.New("closed handles, temp cleanup failed")
+}
+func (x *closedCleanupErrorDestination) Abort() error {
+	x.aborts.Add(1)
+	return errors.New("closed handles, temp cleanup failed")
+}
+
+func TestTransferTerminalRetiresOnlyAfterAdmittedWorkerJoinsDespiteCleanupError(t *testing.T) {
+	g, b, _ := localTransferBinding(t, nil)
+	dest := &closedCleanupErrorDestination{}
+	b.source = nil
+	b.destination = dest
+	b.active = true
+	g.active = 1
+	g.owner.pending = 0
+	g.owner.active = 1
+	b.worker = make(chan struct{})
+	ended := make(chan error, 1)
+	go func() {
+		_, err := g.notice(protocol.TransferNotice{ID: b.id, Kind: "terminal", Outcome: "failed"})
+		ended <- err
+	}()
+	select {
+	case <-ended:
+		t.Fatal("ACK overtook live worker")
+	case <-time.After(10 * time.Millisecond):
+	}
+	g.owner.mu.Lock()
+	active := g.owner.active
+	g.owner.mu.Unlock()
+	if active != 1 {
+		t.Fatal("released quota before worker join")
+	}
+	close(b.worker)
+	select {
+	case err := <-ended:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("slot waited for generation end")
+	}
+	if g.owner.active != 0 || g.binding(b.id) != nil || b.cleanupError == nil || dest.aborts.Load() != 1 || b.ctx.Err() != context.Canceled {
+		t.Fatal("retirement/cleanup ownership", g.owner.active, b.cleanupError)
+	}
+	g.end(b)
+	if dest.aborts.Load() != 1 || g.owner.active != 0 {
+		t.Fatal("duplicate terminal repeated cleanup or decremented twice")
 	}
 }

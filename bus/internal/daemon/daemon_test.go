@@ -57,6 +57,17 @@ func TestMain(m *testing.M) {
 		_ = os.WriteFile(os.Getenv("STDERR_PARENT_READY"), []byte("ready"), 0o600)
 		os.Exit(7)
 	}
+	if strings.HasPrefix(name, "cleanup-worker-") {
+		product := &cleanupWorkerProduct{fixtureProduct: fixtureProduct{product: name}}
+		worker, err := sessionkit.NewWorkerWithTransfers(product, cleanupWorkerExecutor{mode: name})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(8)
+		}
+		product.worker = worker
+		_ = worker.Serve(context.Background())
+		os.Exit(0)
+	}
 	if strings.HasPrefix(name, "mutual-worker") {
 		product := &mutualSendProduct{fixtureProduct: fixtureProduct{product: name}}
 		product.worker = sessionkit.NewWorker(product)

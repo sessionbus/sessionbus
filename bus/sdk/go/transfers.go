@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 
 	"github.com/antst/sessionbus/bus/sdk/go/internal/rpc"
 	"github.com/antst/sessionbus/bus/sdk/go/protocol"
@@ -24,7 +25,8 @@ import (
 // Nil selects FilesystemTransferExecutor, with direct current-user access in all
 // products/modes. Custom executors remain available for controlled integrations.
 // At most four filesystem FDs aggregate both roles may be retained per transfer;
-// custom processes, pipes and JSON have separately bounded costs.
+// custom processes, pipes and JSON have separately bounded costs. Terminal
+// cleanup must close/join executor-owned resources even when reporting residue.
 type TransferExecutor interface {
 	OpenTransferSource(context.Context, string) (TransferSource, error)
 	OpenTransferDestination(context.Context, string, bool) (TransferDestination, error)
@@ -46,7 +48,9 @@ type TransferSource interface {
 // Return ErrTransferCommitUnknown if publication may have occurred but its
 // acknowledgment was lost. Abort must never unlink the final destination,
 // including after UNKNOWN. Neither interface implies fsync/durability.
-// No-replace must be atomic.
+// No-replace must be atomic. On ErrTransferCommitUnknown, Commit must have
+// closed its executor-owned handles and joined its admitted I/O before return;
+// Abort will not be called and terminal retirement cannot retain a live slot.
 type TransferDestination interface {
 	io.Writer
 	Commit() (published bool, cleanup error)
@@ -92,6 +96,7 @@ type transferBinding struct {
 	commitUnknown                       bool
 	retired                             chan struct{}
 	cleanupError                        error
+	cleanupReason                       string
 	ctx                                 context.Context
 	prepareAttempted                    bool
 	prepareError                        error
@@ -216,7 +221,8 @@ func (g *transferGeneration) end(b *transferBinding) {
 	}
 	if commitUnknown {
 		// No destructive abort or late publication retry after an unconfirmed
-		// native publish. Retain the charge until this generation ends.
+		// native publish. Commit has relinquished executor-owned resources;
+		// the publication fact remains UNKNOWN independently of slot retirement.
 		cleanupError = ErrTransferCommitUnknown
 	} else if dest != nil {
 		if err := dest.Abort(); err != nil {
@@ -225,6 +231,9 @@ func (g *transferGeneration) end(b *transferBinding) {
 	}
 	b.mu.Lock()
 	b.cleanupError = cleanupError
+	if cleanupError != nil && !errors.Is(cleanupError, ErrTransferCommitUnknown) {
+		b.cleanupReason = "cleanup_failed"
+	}
 	b.mu.Unlock()
 	// The source can be waiting for finish's reply while terminal notice arrives.
 	// Join off the reader/reply path; capacity remains charged until it exits.
@@ -232,8 +241,10 @@ func (g *transferGeneration) end(b *transferBinding) {
 		if worker != nil {
 			<-worker
 		}
-		if cleanupError != nil {
-			<-g.ctx.Done()
+		// Cleanup errors describe closed-handle residue, not live work. Retire
+		// only after the admitted worker joins, without waiting for disconnect.
+		if b.cancel != nil {
+			b.cancel()
 		}
 		g.mu.Lock()
 		defer g.mu.Unlock()
@@ -743,12 +754,7 @@ func (g *transferGeneration) notice(p protocol.TransferNotice) (struct{}, error)
 			if worker != nil {
 				<-worker
 			}
-			b.mu.Lock()
-			err := b.cleanupError
-			b.mu.Unlock()
-			if err != nil {
-				return struct{}{}, err
-			}
+			// ACK confirms joined handling/resources only, never publication.
 			<-b.retired
 		}
 		return struct{}{}, nil
@@ -905,6 +911,11 @@ func (t *Transfers) ProjectDelivery(wire *Connection, d *DeliveryRequest) func(c
 				return ctx.Err()
 			}
 		}
+		select {
+		case <-b.retired:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		copy := *notice
 		if published := b.publication.Load(); published != nil {
 			copy.Outcome = published.Outcome
@@ -912,6 +923,7 @@ func (t *Transfers) ProjectDelivery(wire *Connection, d *DeliveryRequest) func(c
 			copy.SHA256 = published.SHA256
 			copy.Reason = published.Reason
 		}
+		copy.Reason = withTransferCleanupReason(copy.Reason, b.cleanupReason)
 		projection := struct {
 			protocol.TransferNotice
 			Destination string `json:"destination"`
@@ -922,4 +934,20 @@ func (t *Transfers) ProjectDelivery(wire *Connection, d *DeliveryRequest) func(c
 		}
 		return err
 	}
+}
+
+// Receiver-local projection only; never forward local cleanup details upstream.
+func withTransferCleanupReason(reason, cleanup string) string {
+	if cleanup == "" {
+		return reason
+	}
+	if reason == "" {
+		return cleanup
+	}
+	const limit = 2048
+	for len(reason)+2+len(cleanup) > limit {
+		_, n := utf8.DecodeLastRuneInString(reason)
+		reason = reason[:len(reason)-n]
+	}
+	return reason + "; " + cleanup
 }

@@ -96,13 +96,17 @@ filesystems without hard links fail with `atomic_no_replace_unsupported`
 (ENOTSUP/EOPNOTSUPP), without an overwrite downgrade or rename fallback.
 The Go SDK may use descriptor-relative atomic no-replace rename on Linux/Darwin
 when hard links are unsupported; unsupported atomic rename also fails clearly.
-explicit overwrite uses atomic rename, replacing the named directory entry.
+Explicit overwrite uses atomic rename, replacing the named directory entry.
 Normal OS symlinks are followed when opening the source/parent; there is no
 product sandbox. The parent is resolved once. Public Node fs lacks relative
-link/rename through a directory FD, so later parent replacement can make
-publication/owned-temp cleanup fail; this remains an explicit charged cleanup
-failure, never a claimed rollback or permission guarantee. No fsync/durability
-or immutable source snapshot is promised. File identity, size and modification
+link/rename through a directory FD. A parent rename/replacement detected before
+publication fails with `destination_parent_changed`; cleanup closes its handles
+and the receiver-local terminal reason names any leftover temp basename.
+Replacement between that check and the path-based publication can still publish
+at the user-named path in its current folder. This accepted race remains under
+deferred permission tightening; deterministic tests do not cover every race.
+Go publication remains descriptor-relative. No rollback, permission guarantee,
+fsync/durability or immutable source snapshot is promised. File identity, size and modification
 time are checked on the same source handle after streaming.
 
 Source handles provide `size()`, `read(buffer, signal)` returning a byte count,
@@ -114,7 +118,10 @@ answer is lost. An exception or malformed commit result is conservatively
 UNKNOWN. Confirmed publication remains completed even if cleanup fails. Abort
 must never retract a published destination. File/temp/checked-parent FDs in
 custom children count within the aggregate four per transfer; child processes,
-pipes and JSON buffers need separately bounded adapter costs.
+pipes and JSON buffers need separately bounded adapter costs. Custom executors
+must close/join their owned handles and admitted I/O even when reporting cleanup
+residue. An UNKNOWN commit must relinquish those resources before returning;
+the SDK never calls Abort on that unconfirmed publication.
 
 `Caller.action` accepts `transfer.offer`, `transfer.request`, `transfer.accept`,
 `transfer.cancel` and `transfer.status`. Local source/destination/overwrite fields
@@ -122,13 +129,18 @@ are intercepted by `Transfers`; paths never go to the generic RPC callback.
 For a raw caller, pass `{transfers}` to the `Caller` constructor. Offer/request
 only bind local paths: no handle is opened before acceptance. The generation
 owns submitted/accepted work independently of tool cancellation. Lost replies
-are never replay authority. Ordinary message/Run delivery supplies notices;
+are never replay authority. An accept result is the activated admission snapshot;
+a terminal notice may arrive first. A late accept result never recreates a
+retired binding. Ordinary message/Run delivery supplies notices;
 `projectDelivery` captures the receiver-only destination on the reader and
 returns a function to invoke off-reader before normal delivery. It may wait for
 an already-in-flight publication fact, and never invokes filesystem work or wake.
 
 Pending bindings are limited to eight and preparing/accepted bindings to two
-across overlapping generations in one manager. Old cleanup remains charged
-while normal peer reconnection continues. UNKNOWN cleanup retains its charge
-until generation end; custom executors must honour cancellation and bound their
-own resources. Generated wire DTOs contain no local filesystem path fields.
+across overlapping generations in one manager. Cleanup stays charged while
+admitted I/O or a source worker remains live. After those join and handles close,
+terminal handling retires the slot even for UNKNOWN or closed-handle residue.
+Its machine ACK confirms local resource retirement, not publication success;
+the daemon can then release its host quota and lane hold. Custom executors must
+honour cancellation and bound their own resources. Generated wire DTOs contain
+no local filesystem path fields.

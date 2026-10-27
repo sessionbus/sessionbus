@@ -62,7 +62,12 @@ class FilesystemTransferExecutor {
     let parentClosed = false;
     const closeParent = async () => { if (!parentClosed) { parentClosed = true; await parent.close(); } };
     const checkParent = async () => {
-      if (!sameFile(parentStat, await fs.stat(directory, { bigint: true }))) throw new Error("transfer destination parent changed");
+      let current;
+      try { current = await fs.stat(directory, { bigint: true }); }
+      catch (error) { if (error.code !== "ENOENT") throw error; }
+      if (!current || !sameFile(parentStat, current)) {
+        const error = new Error("transfer destination parent changed"); error.code = "TRANSFER_DESTINATION_PARENT_CHANGED"; throw error;
+      }
     };
     return {
       write: (buffer, currentSignal = signal) => serial(async () => {
@@ -90,11 +95,18 @@ class FilesystemTransferExecutor {
         const errors = [];
         try { await closeFile(); } catch (error) { errors.push(error); }
         if (temp) {
-          try { await checkParent(); await fs.unlink(temp); temp = null; }
-          catch (error) { errors.push(error); }
+          try {
+            await checkParent();
+            try { await fs.unlink(temp); } catch (error) { if (error.code !== "ENOENT") throw error; }
+            temp = null;
+          } catch (error) { errors.push(error); }
         }
         try { await closeParent(); } catch (error) { errors.push(error); }
-        if (errors.length) throw new AggregateError(errors, published ? "committed transfer temp cleanup failed" : "transfer temp cleanup failed");
+        if (errors.length) {
+          const error = new AggregateError(errors, published ? "committed transfer temp cleanup failed" : "transfer temp cleanup failed");
+          if (temp) error.leftoverTemp = path.basename(temp);
+          throw error;
+        }
       }),
     };
   }

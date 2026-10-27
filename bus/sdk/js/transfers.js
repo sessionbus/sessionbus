@@ -9,7 +9,9 @@ const { FilesystemTransferExecutor } = require("./transfer-filesystem.js");
 
 // Handles are endpoint-local. With no custom executor, the SDK reads/writes
 // directly as the OS user in every product/mode. Custom async methods honour
-// cancellation and the same aggregate four filesystem-FD budget.
+// cancellation and the same aggregate four filesystem-FD budget. Terminal
+// cleanup closes/joins their resources even when reporting a leftover temp.
+// CommitUnknown must relinquish owned handles/I/O before return; no Abort follows.
 const ErrTransferCommitUnknown = new Error("transfer_commit_unknown");
 const unsupported = () => new Error("unsupported_transfer");
 const conflict = () => new Error("transfer_binding_conflict");
@@ -140,7 +142,7 @@ class Transfers {
       if (p.kind === "terminal") {
         if (b) {
           await this._end(g, b); await b.worker;
-          if (b.cleanupError) throw b.cleanupError;
+          // ACK means handling/resource retirement, not publication success.
           await b.retired.promise;
         }
       } else if (!b) {
@@ -194,7 +196,7 @@ class Transfers {
             if (!result || typeof result.published !== "boolean") result = { published: false, error: ErrTransferCommitUnknown };
             b.published = result.published;
             if (!b.published && result.error === ErrTransferCommitUnknown) { b.commitUnknown = true; return { id: b.id, outcome: "unknown", bytes: b.offset, reason: "publication_unconfirmed" }; }
-            if (!b.published) return { id: b.id, outcome: "failed", bytes: b.offset, reason: !b.overwrite && ["ENOTSUP", "EOPNOTSUPP"].includes(result.error?.code) ? "atomic_no_replace_unsupported" : "publication_failed" };
+            if (!b.published) return { id: b.id, outcome: "failed", bytes: b.offset, reason: result.error?.code === "TRANSFER_DESTINATION_PARENT_CHANGED" ? "destination_parent_changed" : !b.overwrite && ["ENOTSUP", "EOPNOTSUPP"].includes(result.error?.code) ? "atomic_no_replace_unsupported" : "publication_failed" };
             b.publication = { id: b.id, outcome: "completed", bytes: b.offset, sha256: p.sha256, ...(result.error ? { reason: "committed_cleanup_failed" } : {}) };
             return b.publication;
           } finally { b.commitFinished.resolve(); }
@@ -237,11 +239,14 @@ class Transfers {
       if (b.ended) return;
       b.ended = true;
       try { await b.source?.close(); if (b.commitUnknown) throw ErrTransferCommitUnknown; await b.destination?.abort(); }
-      catch (error) { b.cleanupError = error; }
+      catch (error) {
+        b.cleanupError = error;
+        if (error !== ErrTransferCommitUnknown) b.cleanupReason = typeof error?.leftoverTemp === "string" && /^\.sessionbus-transfer-[0-9a-f]{32}\.tmp$/.test(error.leftoverTemp)
+          ? `cleanup_failed; leftover_temp=${error.leftoverTemp}` : "cleanup_failed";
+      }
       b.source = undefined; b.destination = undefined;
       void (async () => {
         await b.worker;
-        if (b.cleanupError && !g.controller.signal.aborted) await new Promise(resolve => g.controller.signal.addEventListener("abort", resolve, { once: true }));
         if (g.bindings.get(b.id) === b) {
           g.bindings.delete(b.id); if (b.active) this.active--; else this.pending--;
           g.controller.signal.removeEventListener("abort", b.abort); b.retired.resolve();
@@ -257,8 +262,15 @@ class Transfers {
     if (!path) return undefined;
     return async (signal, out) => {
       if (b.commitStarted) await waitSignal(b.commitFinished.promise, signal);
+      await waitSignal(b.retired.promise, signal);
       const fact = b.publication;
-      out.body = JSON.stringify({ ...notice, ...(fact ? { outcome: fact.outcome, bytes: fact.bytes, sha256: fact.sha256, reason: fact.reason } : {}), destination: path });
+      const projected = { ...notice, ...(fact ? { outcome: fact.outcome, bytes: fact.bytes, sha256: fact.sha256, reason: fact.reason } : {}), destination: path };
+      if (b.cleanupReason) {
+        const suffix = `; ${b.cleanupReason}`, limit = 2048 - Buffer.byteLength(suffix); let prefix = "";
+        for (const char of projected.reason || "") { if (Buffer.byteLength(prefix) + Buffer.byteLength(char) > limit) break; prefix += char; }
+        projected.reason = prefix ? prefix + suffix : b.cleanupReason;
+      }
+      out.body = JSON.stringify(projected);
     };
   }
   async closeConnectionGeneration(wire) {

@@ -156,6 +156,9 @@ func TestCapturedReceiverProjectionWaitsOffReaderForPublicationFact(t *testing.T
 	if err := <-finished; err != nil {
 		t.Fatal(err)
 	}
+	if _, err := g.notice(protocol.TransferNotice{ID: b.id, Kind: "terminal", Outcome: "unknown"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := <-projected; err != nil {
 		t.Fatal(err)
 	}
