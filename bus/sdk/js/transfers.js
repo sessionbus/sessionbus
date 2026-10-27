@@ -42,6 +42,7 @@ class Transfers {
   attach(wire, signal, enabled) {
     if (this.current?.wire === wire && this.current.enabled === enabled && !this.current.controller.signal.aborted) return;
     this.current?.controller.abort();
+    if (!enabled) { this.current = null; return; }
     const controller = new AbortController();
     const g = { wire, controller, enabled, bindings: new Map(), creating: new Set(), finished: deferred() };
     this.current = g; this.generations.add(g);

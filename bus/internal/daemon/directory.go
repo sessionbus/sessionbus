@@ -69,7 +69,7 @@ func (d *directory) installPeer(owner *session, hello *protocol.PeerHello, host 
 		if old.row.Product != hello.Product || !slices.Equal(old.declaredGroups, hello.Groups) {
 			return nil, nil, nil, false
 		}
-		old.row.Name, old.info = name, maps.Clone(hello.Info)
+		old.row.Name, old.info = name, peerPublicInfo(hello.Info)
 		d.setTransferCapability(old, transferOptIn(hello.Info))
 		return old, nil, nil, true
 	}
@@ -79,7 +79,7 @@ func (d *directory) installPeer(owner *session, hello *protocol.PeerHello, host 
 	item := &entry{lifetime: &ownership{id: id, token: randomID("owner"), destinations: map[string]bool{}}, peer: true, declaredGroups: append([]string(nil), hello.Groups...), attachment: owner, done: make(chan struct{})}
 	item.row = row{SessionID: id, Product: hello.Product, Name: name}
 	item.row.Groups = orderedPeerGroups(hello.Groups, privateGroup(item))
-	item.info = maps.Clone(hello.Info)
+	item.info = peerPublicInfo(hello.Info)
 	d.setTransferCapability(item, transferOptIn(hello.Info))
 	if old != nil {
 		delete(d.entries, old.row.SessionID)

@@ -115,6 +115,16 @@ func newTransfers(executor TransferExecutor) *Transfers {
 	return &Transfers{executor: executor, generations: map[*transferGeneration]struct{}{}}
 }
 func (t *Transfers) attach(wire *rpc.Conn, ctx context.Context, enabled bool) {
+	if !enabled {
+		t.mu.Lock()
+		old := t.current
+		t.current = nil
+		t.mu.Unlock()
+		if old != nil {
+			old.cancel()
+		}
+		return
+	}
 	child, cancel := context.WithCancel(ctx)
 	stopWire := context.AfterFunc(wire.Context(), cancel)
 	g := &transferGeneration{finished: make(chan struct{}), owner: t, wire: wire, ctx: child, cancel: cancel, enabled: enabled, bindings: map[string]*transferBinding{}}
