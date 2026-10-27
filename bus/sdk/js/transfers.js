@@ -194,7 +194,7 @@ class Transfers {
             if (!result || typeof result.published !== "boolean") result = { published: false, error: ErrTransferCommitUnknown };
             b.published = result.published;
             if (!b.published && result.error === ErrTransferCommitUnknown) { b.commitUnknown = true; return { id: b.id, outcome: "unknown", bytes: b.offset, reason: "publication_unconfirmed" }; }
-            if (!b.published) return { id: b.id, outcome: "failed", bytes: b.offset, reason: ["ENOTSUP", "EOPNOTSUPP"].includes(result.error?.code) ? "atomic_no_replace_unsupported" : "publication_failed" };
+            if (!b.published) return { id: b.id, outcome: "failed", bytes: b.offset, reason: !b.overwrite && ["ENOTSUP", "EOPNOTSUPP"].includes(result.error?.code) ? "atomic_no_replace_unsupported" : "publication_failed" };
             b.publication = { id: b.id, outcome: "completed", bytes: b.offset, sha256: p.sha256, ...(result.error ? { reason: "committed_cleanup_failed" } : {}) };
             return b.publication;
           } finally { b.commitFinished.resolve(); }

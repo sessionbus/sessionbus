@@ -163,3 +163,20 @@ test("unsupported JS hard-link publication fails clearly without UNKNOWN", { tim
  assert.equal(result.outcome,"failed");assert.equal(result.reason,"atomic_no_replace_unsupported");
  await f.bus.call("transfer.notice",{kind:"terminal",...result});
 });
+
+for (const code of ["ENOTSUP", "EOPNOTSUPP"]) {
+ test(`unsupported JS overwrite publication reports the attempted operation (${code})`, { timeout: 2000 }, async t => {
+  const f=fixture(t,{...noExecutor,openTransferDestination:async(_signal,_path,overwrite)=>{
+   assert.equal(overwrite,true);
+   return {write:raw=>raw.length,commit:()=>({published:false,error:Object.assign(new Error("unsupported overwrite rename"),{code})}),abort:()=>{}};
+  }},async r=>descriptor(r.params.id));
+  await f.bus.call("transfer.notice",{kind:"offer",id:"one",name:"file",from:{session_id:"source@local",product:"test",groups:[]}});
+  await f.transfers.accept({id:"one",path:"/local/destination",overwrite:true});
+  await f.bus.call("transfer.prepare",{id:"one",role:"destination",size:sourceText.length});
+  await f.bus.call("transfer.start",{id:"one",role:"destination",size:sourceText.length});
+  await f.bus.call("transfer.chunk",{id:"one",offset:0,data:sourceText.toString("base64")});
+  const result=await f.bus.call("transfer.finish",{id:"one",bytes:sourceText.length,sha256:hash});
+  assert.equal(result.outcome,"failed");assert.equal(result.reason,"publication_failed");
+  await f.bus.call("transfer.notice",{kind:"terminal",...result});
+ });
+}
