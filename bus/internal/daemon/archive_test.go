@@ -6,6 +6,8 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net"
 	"os"
 	"os/signal"
@@ -316,7 +318,7 @@ func TestArchiveOperatorCapacityPreserved(t *testing.T) {
 	must(t, err)
 	defer extra.Close()
 	must(t, extra.SetDeadline(time.Now().Add(time.Second)))
-	if _, err = bufio.NewReader(extra).ReadByte(); err == nil {
-		t.Fatal("ninth handler was admitted")
+	if _, err = bufio.NewReader(extra).ReadByte(); !errors.Is(err, io.EOF) {
+		t.Fatalf("ninth handler was not rejected with EOF: %v", err)
 	}
 }

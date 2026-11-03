@@ -19,8 +19,12 @@ import (
 // This test intentionally uses only APIs present on the parent commit so its
 // identical bytes also prove that the old executable lacks the command.
 func TestArchiveCommandAgainstOperator(t *testing.T) {
-	for _, variant := range []string{"closed", "offline", "busy", "unknown", "old-daemon", "invalid-response", "wrong-target"} {
+	for _, variant := range []string{"closed", "offline", "unqualified", "busy", "unknown", "old-daemon", "invalid-response", "wrong-target"} {
 		t.Run(variant, func(t *testing.T) {
+			target := "native@local"
+			if variant == "unqualified" {
+				target = "native"
+			}
 			socket := filepath.Join(testsocket.Directory(t), "presence.sock")
 			listener, err := net.Listen("unix", roster.Socket(socket))
 			if err != nil {
@@ -44,7 +48,7 @@ func TestArchiveCommandAgainstOperator(t *testing.T) {
 					served <- err
 					return
 				}
-				if len(request) != 2 || request["action"] != "lane.archive" || request["session_id"] != "native@local" {
+				if len(request) != 2 || request["action"] != "lane.archive" || request["session_id"] != target {
 					served <- fmt.Errorf("wrong request: %#v", request)
 					return
 				}
@@ -68,11 +72,11 @@ func TestArchiveCommandAgainstOperator(t *testing.T) {
 				served <- err
 			}()
 			var output bytes.Buffer
-			err = runTo([]string{"lane", "archive", "--socket", socket, "--timeout", "2s", "native@local"}, &output)
+			err = runTo([]string{"lane", "archive", "--socket", socket, "--timeout", "2s", target}, &output)
 			if serveErr := <-served; serveErr != nil {
 				t.Fatalf("operator: %v; command: %v; output=%s", serveErr, err, output.String())
 			}
-			wantSuccess := variant == "closed" || variant == "offline"
+			wantSuccess := variant == "closed" || variant == "offline" || variant == "unqualified"
 			if (err == nil) != wantSuccess {
 				t.Fatalf("error=%v output=%s", err, output.String())
 			}
