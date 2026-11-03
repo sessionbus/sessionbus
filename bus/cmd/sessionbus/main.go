@@ -71,8 +71,10 @@ func runTo(arguments []string, stdout io.Writer) error {
 			arguments = []string{"roster", "--help"}
 		case len(arguments) == 2 && arguments[1] == "secret":
 			arguments = []string{"secret", "--help"}
+		case len(arguments) == 3 && arguments[1] == "lane" && arguments[2] == "archive":
+			arguments = []string{"lane", "archive", "--help"}
 		default:
-			return errors.New("usage: sessionbus help [roster|secret]")
+			return errors.New("usage: sessionbus help [roster|secret|lane archive]")
 		}
 	}
 	if len(arguments) == 2 && arguments[0] == "secret" && (arguments[1] == "--help" || arguments[1] == "-h") {
@@ -81,6 +83,9 @@ func runTo(arguments []string, stdout io.Writer) error {
 	}
 	if len(arguments) > 0 && arguments[0] == "roster" {
 		return runRoster(arguments[1:], stdout)
+	}
+	if len(arguments) > 0 && arguments[0] == "lane" {
+		return runLane(arguments[1:], stdout)
 	}
 	if len(arguments) == 1 && arguments[0] == "secret" {
 		secret, err := federation.NewSecret()
@@ -203,9 +208,10 @@ const daemonHelp = `Sessionbus — local and federated session router
 Usage:
   sessionbus [daemon flags]           Run the daemon in the foreground
   sessionbus roster [--all] [--json] [--local]  Inspect online peers and active lanes
+  sessionbus lane archive [flags] <id>  Stop a local lane; retain history/resume
   sessionbus secret                  Generate a private federation join secret
   sessionbus -version                Show the release and source revision
-  sessionbus help [roster|secret]     Show command help
+  sessionbus help [roster|secret|lane archive]  Show command help
 
 Examples:
   sessionbus roster

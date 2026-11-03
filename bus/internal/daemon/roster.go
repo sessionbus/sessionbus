@@ -105,6 +105,16 @@ func (d *Daemon) serveOperator(fd net.Conn) {
 	if err != nil {
 		return
 	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return
+	}
+	_, action := fields["action"]
+	_, target := fields["session_id"]
+	if action || target {
+		d.serveArchive(fd, raw)
+		return
+	}
 	var request roster.Request
 	if protocol.DecodeJSON(raw, &request) != nil {
 		return
