@@ -34,7 +34,7 @@ func (s *session) transferHold(e transferHoldEvent) bool {
 		return true
 	}
 	now := s.daemon.config.now()
-	if !s.deadline.IsZero() && !now.Before(s.deadline) {
+	if len(s.transferHolds) == 0 && !s.deadline.IsZero() && !now.Before(s.deadline) {
 		return false
 	} // Already-due close wins.
 	if s.transferHolds == nil {
