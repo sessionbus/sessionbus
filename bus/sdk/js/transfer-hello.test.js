@@ -81,3 +81,33 @@ test("rejected raw hello observer cannot retire its synchronous successor", { ti
   assert.deepEqual(await next.transfers.offer(offer), descriptor);
   assert.deepEqual(next.incoming.map(request => request.method), ["transfer.offer"]);
 });
+
+test("same-wire hello preserves unchanged lifetime but replaces a new identity lifetime", { timeout: 2000 }, async t => {
+  const f = rawFixture(t), next = new AbortController();
+  t.after(() => next.abort());
+  await f.transfers.helloObserved(f.client, identity, f.scope.signal);
+  const first = f.transfers.current;
+  await f.transfers.offer(offer);
+  await f.transfers.helloObserved(f.client, { ...identity, info: { title: "metadata" } }, f.scope.signal);
+  assert.equal(f.transfers.current, first); assert.equal(first.bindings.has("one"), true);
+  await f.transfers.helloObserved(f.client, { ...identity, session_id: "next@local" }, next.signal);
+  f.scope.abort(new Error("old identity ended")); await first.finished.promise;
+  assert.deepEqual(await f.transfers.offer(offer), descriptor);
+  const current = f.transfers.current;
+  assert.notEqual(current, first); assert.equal(first.bindings.size, 0);
+  next.abort(); await current.finished.promise;
+  assert.throws(() => f.transfers.offer(offer), /unsupported_transfer/);
+  assert.equal(f.transfers.pending, 0); assert.equal(f.transfers.active, 0);
+});
+
+test("cancelled same-wire attachment never displaces the live identity", { timeout: 2000 }, async t => {
+  const f = rawFixture(t), stale = new AbortController();
+  await f.transfers.helloObserved(f.client, identity, f.scope.signal);
+  const first = f.transfers.current;
+  stale.abort();
+  for (const enabled of [false, true]) {
+    assert.equal(f.transfers.attach(f.client, stale.signal, enabled), null);
+    assert.equal(f.transfers.current, first);
+  }
+  assert.deepEqual(await f.transfers.offer(offer), descriptor);
+});

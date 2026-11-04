@@ -262,8 +262,8 @@ func (s *session) transferNotice(event transferNoticeEvent) {
 		s.issue(routedRequest{destination: event.entry, method: "message.deliver", params: protocol.DeliveryRequest{MessageID: randomID("transfer-notice"), From: from, Body: string(body)}, reply: make(chan answer, 1)})
 	}
 	if n.Kind == "terminal" {
-		// Wire-reader order lets only the destination SDK decorate this ordinary
-		// notice while its local binding still exists. No destination enters wire.
+		// Wire-reader order lets each SDK decorate this ordinary notice while
+		// its local binding exists. No endpoint-local paths enter the wire.
 		ordinary()
 		s.issue(machine)
 	} else {

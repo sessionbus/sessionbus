@@ -77,6 +77,7 @@ type transferGeneration struct {
 	finished            chan struct{}
 	owner               *Transfers
 	wire                *rpc.Conn
+	identityDone        <-chan struct{}
 	ctx                 context.Context
 	cancel              context.CancelFunc
 	mu                  sync.Mutex
@@ -134,9 +135,10 @@ func (t *Transfers) attach(wire *rpc.Conn, ctx context.Context, enabled bool) *t
 		}
 		return nil
 	}
+	identityDone := ctx.Done()
 	child, cancel := context.WithCancel(ctx)
 	stopWire := context.AfterFunc(wire.Context(), cancel)
-	g := &transferGeneration{finished: make(chan struct{}), owner: t, wire: wire, ctx: child, cancel: cancel, enabled: enabled, bindings: map[string]*transferBinding{}}
+	g := &transferGeneration{finished: make(chan struct{}), owner: t, wire: wire, identityDone: identityDone, ctx: child, cancel: cancel, enabled: enabled, bindings: map[string]*transferBinding{}}
 	t.mu.Lock()
 	if ctx.Err() != nil || wire.Context().Err() != nil {
 		t.mu.Unlock()
@@ -144,7 +146,7 @@ func (t *Transfers) attach(wire *rpc.Conn, ctx context.Context, enabled bool) *t
 		stopWire()
 		return nil
 	}
-	if t.current != nil && t.current.wire == wire && t.current.enabled == enabled && t.current.ctx.Err() == nil {
+	if t.current != nil && t.current.wire == wire && t.current.identityDone == identityDone && t.current.enabled == enabled && t.current.ctx.Err() == nil {
 		current := t.current
 		t.mu.Unlock()
 		cancel()
@@ -872,7 +874,7 @@ func (t *Transfers) HandleConnectionRequest(wire *Connection, request *Request) 
 // a raw broker disposes or replaces its native identity/executor.
 func (t *Transfers) CloseConnectionGeneration(wire *Connection) { t.wait(wire) }
 
-// ProjectDelivery captures a bounded receiver-local projection on the reader.
+// ProjectDelivery captures a bounded endpoint-local projection on the reader.
 // Invoke its returned function OFF the reader, before normal native delivery.
 // If publication was already in flight, it waits for that one fact/UNKNOWN;
 // it performs no filesystem operation, retry, direct wake or model callback.
@@ -900,9 +902,6 @@ func (t *Transfers) ProjectDelivery(wire *Connection, d *DeliveryRequest) func(c
 		return nil
 	}
 	path := b.destinationProjection.Load()
-	if path == nil {
-		return nil
-	}
 	return func(ctx context.Context, out *DeliveryRequest) error {
 		if b.commitStarted.Load() && b.commitFinished != nil {
 			select {
@@ -923,11 +922,15 @@ func (t *Transfers) ProjectDelivery(wire *Connection, d *DeliveryRequest) func(c
 			copy.SHA256 = published.SHA256
 			copy.Reason = published.Reason
 		}
-		copy.Reason = withTransferCleanupReason(copy.Reason, b.cleanupReason)
+		cleanup := b.cleanupReason
+		if b.role == "source" && cleanup != "" {
+			cleanup = "cleanup_failed"
+		}
+		copy.Reason = withTransferCleanupReason(copy.Reason, cleanup)
 		projection := struct {
 			protocol.TransferNotice
-			Destination string `json:"destination"`
-		}{copy, *path}
+			Destination *string `json:"destination,omitempty"`
+		}{copy, path}
 		raw, err := json.Marshal(projection)
 		if err == nil {
 			out.Body = string(raw)
@@ -936,7 +939,7 @@ func (t *Transfers) ProjectDelivery(wire *Connection, d *DeliveryRequest) func(c
 	}
 }
 
-// Receiver-local projection only; never forward local cleanup details upstream.
+// Endpoint-local projection only; never forward local cleanup details upstream.
 func withTransferCleanupReason(reason, cleanup string) string {
 	if cleanup == "" {
 		return reason

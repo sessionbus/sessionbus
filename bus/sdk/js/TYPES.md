@@ -132,9 +132,11 @@ owns submitted/accepted work independently of tool cancellation. Lost replies
 are never replay authority. An accept result is the activated admission snapshot;
 a terminal notice may arrive first. A late accept result never recreates a
 retired binding. Ordinary message/Run delivery supplies notices;
-`projectDelivery` captures the receiver-only destination on the reader and
-returns a function to invoke off-reader before normal delivery. It may wait for
-an already-in-flight publication fact, and never invokes filesystem work or wake.
+`projectDelivery` captures endpoint-local cleanup reporting and the receiver-only
+destination on the reader, returning a function to invoke off-reader before normal
+delivery. It may wait for an already-in-flight publication fact and terminal
+retirement, and never invokes filesystem work or wake. Source cleanup failures
+add only a generic `cleanup_failed` reason, without a source path or diagnostic.
 
 Pending bindings are limited to eight and preparing/accepted bindings to two
 across overlapping generations in one manager. Cleanup stays charged while

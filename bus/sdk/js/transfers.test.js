@@ -85,6 +85,33 @@ test("unconfirmed publication retires its terminal slot without abort or retry",
   f.scope.abort(); await f.transfers.closeConnectionGeneration(); assert.equal(f.transfers.active,0); assert.equal(aborts,0);
 });
 
+test("source cleanup failure is generic and local after its joined terminal", { timeout: 2000 }, async t => {
+  for (const outcome of ["cancelled", "completed", "unknown"]) {
+    let closed = 0, projected = false; const entered = deferred(), release = deferred();
+    const error = Object.assign(new Error("closed /private/source: private cleanup diagnostic"), { leftoverTemp: ".sessionbus-transfer-" + "a".repeat(32) + ".tmp" });
+    const f = fixture(t, { ...noExecutor, openTransferSource: async () => ({ size: () => 0, read: () => 0, verify: () => {}, close: async () => { closed++; entered.resolve(); await release.promise; throw error; } }) }, async () => descriptor("one"));
+    await f.transfers.offer({ target: "destination@local", source: "/private/source", name: "file" });
+    await f.bus.call("transfer.prepare", { id: "one", role: "source" });
+    const reason = "界".repeat(680), terminal = { kind: "terminal", id: "one", outcome, bytes: 0, reason };
+    const delivery = { message_id: "transfer-notice-one", body: JSON.stringify(terminal) };
+    const project = f.transfers.projectDelivery(f.client, delivery);
+    if (typeof project !== "function") release.resolve();
+    assert.equal(typeof project, "function");
+    const projection = project(undefined, delivery).then(() => { projected = true; });
+    const ended = f.bus.call("transfer.notice", terminal);
+    await entered.promise; assert.equal(projected, false);
+    release.resolve(); await ended; await projection;
+    const body = JSON.parse(delivery.body);
+    assert.equal(body.outcome, outcome); assert.equal(terminal.reason, reason);
+    assert.match(body.reason, /; cleanup_failed$/); assert.ok(Buffer.byteLength(body.reason) <= 2048);
+    assert.equal(body.reason.includes("\ufffd"), false); assert.equal(Object.hasOwn(body, "destination"), false);
+    for (const privateText of ["/private/", "diagnostic", "leftover_temp", ".sessionbus-transfer-"]) assert.equal(delivery.body.includes(privateText), false);
+    assert.equal(closed, 1); assert.equal(f.transfers.pending, 0); assert.equal(f.transfers.active, 0);
+    await f.bus.call("transfer.notice", terminal); assert.equal(closed, 1);
+    assert.equal(f.transfers.projectDelivery(f.client, delivery), undefined);
+  }
+});
+
 test("late confirmed publication upgrades only captured receiver notice off reader", { timeout: 2000 }, async t => {
   const publishing = deferred(), release = deferred();
   const f = fixture(t, { ...noExecutor, openTransferDestination: async () => ({ write: raw => raw.length, commit: async () => { publishing.resolve(); await release.promise; return { published: true }; }, abort: () => {} }) }, async r => descriptor(r.params.id));

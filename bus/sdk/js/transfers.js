@@ -42,11 +42,12 @@ class Transfers {
     this.executor = executor; this.pending = 0; this.active = 0; this.generations = new Set();
   }
   attach(wire, signal, enabled) {
-    if (this.current?.wire === wire && this.current.enabled === enabled && !this.current.controller.signal.aborted) return this.current;
+    if (signal?.aborted || wire.signal.aborted) return null;
+    if (this.current?.wire === wire && this.current.identitySignal === signal && this.current.enabled === enabled && !this.current.controller.signal.aborted) return this.current;
     this.current?.controller.abort();
     if (!enabled) { this.current = null; return null; }
     const controller = new AbortController();
-    const g = { wire, controller, enabled, bindings: new Map(), creating: new Set(), finished: deferred() };
+    const g = { wire, identitySignal: signal, controller, enabled, bindings: new Map(), creating: new Set(), finished: deferred() };
     this.current = g; this.generations.add(g);
     const abort = () => controller.abort(signal?.reason || wire.signal.reason);
     signal?.addEventListener("abort", abort, { once: true }); wire.signal.addEventListener("abort", abort, { once: true });
@@ -270,17 +271,19 @@ class Transfers {
     if (!delivery.message_id?.startsWith("transfer-notice-")) return undefined;
     let notice; try { notice = JSON.parse(delivery.body); } catch { return undefined; }
     if (!validate("TransferNotice", notice) || notice.kind !== "terminal" || this.current?.wire !== wire) return undefined;
-    const b = this.current.bindings.get(notice.id), path = b?.destinationProjection;
-    if (!path) return undefined;
+    const b = this.current.bindings.get(notice.id);
+    if (!b) return undefined;
+    const path = b.destinationProjection;
     return async (signal, out) => {
       if (b.commitStarted) await waitSignal(b.commitFinished.promise, signal);
       await waitSignal(b.retired.promise, signal);
       const fact = b.publication;
-      const projected = { ...notice, ...(fact ? { outcome: fact.outcome, bytes: fact.bytes, sha256: fact.sha256, reason: fact.reason } : {}), destination: path };
-      if (b.cleanupReason) {
-        const suffix = `; ${b.cleanupReason}`, limit = 2048 - Buffer.byteLength(suffix); let prefix = "";
+      const projected = { ...notice, ...(fact ? { outcome: fact.outcome, bytes: fact.bytes, sha256: fact.sha256, reason: fact.reason } : {}), ...(path ? { destination: path } : {}) };
+      const cleanup = b.role === "source" && b.cleanupReason ? "cleanup_failed" : b.cleanupReason;
+      if (cleanup) {
+        const suffix = `; ${cleanup}`, limit = 2048 - Buffer.byteLength(suffix); let prefix = "";
         for (const char of projected.reason || "") { if (Buffer.byteLength(prefix) + Buffer.byteLength(char) > limit) break; prefix += char; }
-        projected.reason = prefix ? prefix + suffix : b.cleanupReason;
+        projected.reason = prefix ? prefix + suffix : cleanup;
       }
       out.body = JSON.stringify(projected);
     };
