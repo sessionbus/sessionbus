@@ -920,10 +920,12 @@ activation retires its own resources once; uncertain cleanup remains charged.
 
 Raw chunks are at most 64 KiB with a 256 KiB credit ceiling. The current source
 uses one acknowledged chunk at a time; credit is returned only after destination
-write/capacity release. Chunks have four independent ingress/egress/correlation
-slots per connection and an 88 KiB encoded frame limit. Metadata is at most
-8 KiB. Bulk does not use the overflow-closing ordinary send queue or its 256
-correlations. One writer gives eight control frames then one eligible bulk
+write/capacity release. `transfer.chunk` request frames have four independent
+ingress/egress/correlation slots per connection and an 88 KiB encoded frame limit.
+Metadata is at most 8 KiB. These bulk requests do not use the overflow-closing
+ordinary send queue or its 256 correlations. Chunk replies are small control
+frames; daemon replies use ordinary `Send` and retain its capacity/overflow-close
+behavior. One writer gives eight control frames then one eligible bulk
 frame, rotating transfer IDs. Request IDs are assigned at selection, in actual
 wire order. An in-progress physical NDJSON frame cannot be preempted; a stalled
 socket has no unconditional message-latency bound.
@@ -956,8 +958,10 @@ the path never enters daemon/hub state or the sender's notice. A captured
 projection may wait off-reader for an already-in-flight publication fact.
 There is no durable terminal table, reconnect continuation or notice replay.
 
-Only accepted streaming/committing transfers hold lanes. Pending offers,
-status, collection, ACK and notices do not rearm grace. Grace starts after the
+Only accepted transfers hold lanes. Holds are acquired during preparing, after
+both endpoint preparations and before streaming; acquired holds continue through
+streaming/committing. Pending offers, status, collection, ACK and notices do not
+rearm grace. Grace starts after the
 later actual Run terminal/last held-transfer terminal, respecting zero grace,
 persistence and existing unavailable-Run behavior. Explicit close retires the
 exact generation's transfers with the same publication/UNKNOWN rules. Ordinary

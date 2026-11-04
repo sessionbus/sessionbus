@@ -25,8 +25,10 @@ endpoints connected to old daemons retain ordinary functionality and refuse
 transfer actions. Both hub legs must negotiate the new ALPN superset; old
 wake/trace/roster/no-ALPN fallbacks remain usable for ordinary traffic.
 
-Only accepted streaming/committing transfers hold a lane. Pending/preparing
-requests do not extend grace. Preparation reserves resource capacity separately
+Only accepted transfers hold a lane. Holds are acquired during preparing, after
+both endpoint preparations and before streaming; acquired holds continue through
+streaming/committing. Pending offers and requests have no holds. Preparation
+reserves resource capacity separately
 from lane holds. Both participant generations activate before the destination
 is armed and the source worker starts automatically. A close that wins the
 activation race refuses preparation; partial activation releases its original
@@ -55,8 +57,10 @@ reports completed and never removes its committed destination.
   retracts the destination.
 - Disk-full/hash/size/credit failures release owned buffers, handles and holds
   exactly once; unknown active cleanup is reported instead of hidden.
-- Control and machine chunks have separate bounded admission at reader/owner,
-  correlation and writer seams. Bulk never calls overflow-closing control Send.
+- Control frames and machine chunk requests have separate bounded admission at
+  reader/owner, correlation and writer seams. Bulk requests avoid ordinary control
+  Send; small chunk replies retain ordinary control behavior, including daemon
+  Send's existing overflow-close policy.
   IDs are assigned in selected wire order, not before priority reordering.
 - A partial NDJSON write cannot be preempted. Message-latency objectives apply
   under the documented draining-link workload; no new short timeout or healthy
