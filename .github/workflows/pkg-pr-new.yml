@@ -38,6 +38,9 @@ jobs:
             'sdk/js/connection.js',
             'sdk/js/index.js',
             'sdk/js/schema.js',
+            'sdk/js/transfer-protocol.js',
+            'sdk/js/transfers.js',
+            'sdk/js/transfer-filesystem.js',
           ].sort()
           if (JSON.stringify(got) !== JSON.stringify(want)) {
             throw new Error(`unexpected npm pack files: ${JSON.stringify(got)}`)

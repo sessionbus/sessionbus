@@ -24,7 +24,18 @@ type methodCodec struct {
 func newValue[T any]() any { return new(T) }
 
 var methodCodecs = map[string]methodCodec{
-	"session.hello":      {"SessionHelloRequest", "SessionHelloResult", nil, newValue[struct{}], true, false},
+	"transfer.offer":     {"TransferOffer", "TransferDescriptor", newValue[TransferOffer], newValue[TransferDescriptor], true, false},
+	"transfer.request":   {"TransferRequest", "TransferDescriptor", newValue[TransferRequest], newValue[TransferDescriptor], true, false},
+	"transfer.accept":    {"TransferAccept", "TransferDescriptor", newValue[TransferAccept], newValue[TransferDescriptor], true, false},
+	"transfer.status":    {"TransferTarget", "TransferDescriptor", newValue[TransferTarget], newValue[TransferDescriptor], true, false},
+	"transfer.cancel":    {"TransferTarget", "TransferTerminal", newValue[TransferTarget], newValue[TransferTerminal], true, false},
+	"transfer.fail":      {"TransferFailure", "TransferTerminal", newValue[TransferFailure], newValue[TransferTerminal], true, false},
+	"transfer.prepare":   {"TransferPrepare", "TransferPrepared", newValue[TransferPrepare], newValue[TransferPrepared], false, true},
+	"transfer.start":     {"TransferStart", "TransferStarted", newValue[TransferStart], newValue[TransferStarted], false, true},
+	"transfer.chunk":     {"TransferChunk", "TransferCredit", newValue[TransferChunk], newValue[TransferCredit], true, true},
+	"transfer.finish":    {"TransferFinish", "TransferTerminal", newValue[TransferFinish], newValue[TransferTerminal], true, true},
+	"transfer.notice":    {"TransferNotice", "SessionCloseResult", newValue[TransferNotice], newValue[struct{}], false, true},
+	"session.hello":      {"SessionHelloRequest", "SessionHelloResult", nil, newValue[HelloResult], true, false},
 	"session.superseded": {"SessionSupersededRequest", "SessionSupersededResult", newValue[struct{}], newValue[struct{}], false, true},
 	"session.list":       {"SessionListRequest", "SessionListResult", newValue[SessionListRequest], newValue[SessionListResult], true, false},
 	"message.send":       {"MessageSendRequest", "MessageSendResult", newValue[MessageSendRequest], newValue[MessageSendResult], true, false},
@@ -67,7 +78,11 @@ func DecodeParams(method string, raw []byte) (any, error) {
 			target = newValue[PeerHello]
 		}
 	}
-	return decode(raw, target)
+	value, err := decode(raw, target)
+	if err == nil {
+		err = ValidateTransferParams(method, value)
+	}
+	return value, err
 }
 
 func DecodeResult(method string, raw []byte) (any, error) {
@@ -78,7 +93,11 @@ func DecodeResult(method string, raw []byte) (any, error) {
 	if err := validateDefinition(spec.result, raw); err != nil {
 		return nil, err
 	}
-	return decode(raw, spec.newResult)
+	value, err := decode(raw, spec.newResult)
+	if err == nil {
+		err = ValidateTransferResult(method, value)
+	}
+	return value, err
 }
 
 func decode(raw []byte, newTarget func() any) (any, error) {
@@ -111,6 +130,13 @@ func encodeDefinition(method string, value any, params bool) ([]byte, error) {
 	if err = validateDefinition(name, raw); err != nil {
 		return nil, err
 	}
+	if params {
+		if err = ValidateTransferParams(method, value); err != nil {
+			return nil, err
+		}
+	} else if err = ValidateTransferResult(method, value); err != nil {
+		return nil, err
+	}
 	return raw, nil
 }
 func UnmarshalResult(method string, raw []byte, target any) error {
@@ -119,6 +145,9 @@ func UnmarshalResult(method string, raw []byte, target any) error {
 		return errInvalid
 	}
 	if err := validateDefinition(spec.result, raw); err != nil {
+		return err
+	}
+	if err := ValidateTransferResult(method, json.RawMessage(raw)); err != nil {
 		return err
 	}
 	if json.Unmarshal(raw, target) != nil {
@@ -262,7 +291,12 @@ func schemaIssue(rule schemaNode, value any, path, with string) string {
 			return fmt.Sprintf("%s must contain at most %g character%s", location(path), maximum, plural(maximum))
 		}
 		if pattern, ok := rule["pattern"].(string); ok {
-			matched, _ := regexp.MatchString(pattern, text)
+			var matched bool
+			if pattern == "^[A-Za-z0-9+/]+={0,2}$" {
+				_, matched = transferBase64Syntax(text)
+			} else {
+				matched, _ = regexp.MatchString(pattern, text)
+			}
 			if !matched {
 				return fmt.Sprintf("%s must match %q", location(path), pattern)
 			}

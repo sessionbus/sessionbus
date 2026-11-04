@@ -4,6 +4,7 @@ package daemon
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/antst/sessionbus/bus/internal/commslog"
 	"github.com/antst/sessionbus/bus/sdk/go/protocol"
@@ -30,7 +31,20 @@ func (s *session) handleRequest(frame protocol.Frame, params any) {
 }
 
 func (s *session) dispatchRequest(frame protocol.Frame, params any) {
-	if len(s.requests) >= protocol.MaxOperations && frame.Method != "turn.ready" {
+	if strings.HasPrefix(frame.Method, "transfer.") {
+		limit := protocol.MaxOperations
+		bulk := frame.Method == "transfer.chunk"
+		if bulk {
+			limit = 4
+		}
+		if s.requestCount(bulk) >= limit {
+			s.error(frame, protocol.Busy, nil)
+			return
+		}
+		s.transferRequest(frame, params)
+		return
+	}
+	if s.requestCount(false) >= protocol.MaxOperations && frame.Method != "turn.ready" {
 		messageID := ""
 		if frame.Method == "message.send" {
 			messageID = s.messageID
@@ -95,7 +109,12 @@ func (s *session) peerHello(frame protocol.Frame, hello *protocol.PeerHello) {
 	if displaced != nil && !displaced.wire.Post(supersedeEvent{}) {
 		displaced.wire.Close()
 	}
-	s.result(frame, struct{}{})
+	s.supportsTransfer = transferOptIn(hello.Info)
+	result := protocol.HelloResult{}
+	if s.supportsTransfer {
+		result.Capabilities = []string{protocol.TransferCapability}
+	}
+	s.result(frame, result)
 }
 
 func (s *session) list(frame protocol.Frame, input *protocol.SessionListRequest) {
@@ -418,6 +437,9 @@ func (s *session) finishRequest(id int64, state *requestState, result answer) {
 		s.remoteResponse(state.frame, *result.remote)
 	} else {
 		s.result(state.frame, result.value)
+	}
+	if result.code == 0 && result.after != nil {
+		go result.after()
 	}
 	if state.frame.Method != "turn.run" || s.runPending(state.target, state.targetID) {
 		return

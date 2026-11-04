@@ -116,7 +116,7 @@ func rawResponseBytes(id int64, key string, value []byte) ([]byte, error) {
 }
 
 func errorReply(code int, data any) Reply {
-	message := map[int]string{protocol.InvalidFrame: "invalid_frame", protocol.UnknownHost: "unknown_host", protocol.ForwardLost: "forward_lost", protocol.UnsupportedTrace: "unsupported_trace"}[code]
+	message := map[int]string{protocol.Internal: "internal", protocol.Busy: "busy", protocol.UnknownSession: "unknown_session", protocol.UnsupportedOpen: "unsupported_open_field", protocol.InvalidFrame: "invalid_frame", protocol.UnknownHost: "unknown_host", protocol.ForwardLost: "forward_lost", protocol.UnsupportedTrace: "unsupported_trace"}[code]
 	raw, _ := json.Marshal(data)
 	if data == nil {
 		raw = nil

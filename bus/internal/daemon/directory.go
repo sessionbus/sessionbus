@@ -13,18 +13,21 @@ import (
 )
 
 type entry struct {
-	traceMode      string
-	traceVersion   string
-	lifetime       *ownership
-	parent         *ownership
-	row            row
-	peer           bool
-	info           map[string]any
-	declaredGroups []string
-	claimed        bool
-	running        bool
-	attachment     *session
-	done           chan struct{}
+	transferCapable bool
+	transferKey     string
+	transferDone    chan struct{}
+	traceMode       string
+	traceVersion    string
+	lifetime        *ownership
+	parent          *ownership
+	row             row
+	peer            bool
+	info            map[string]any
+	declaredGroups  []string
+	claimed         bool
+	running         bool
+	attachment      *session
+	done            chan struct{}
 }
 
 type directory struct {
@@ -66,7 +69,8 @@ func (d *directory) installPeer(owner *session, hello *protocol.PeerHello, host 
 		if old.row.Product != hello.Product || !slices.Equal(old.declaredGroups, hello.Groups) {
 			return nil, nil, nil, false
 		}
-		old.row.Name, old.info = name, maps.Clone(hello.Info)
+		old.row.Name, old.info = name, peerPublicInfo(hello.Info)
+		d.setTransferCapability(old, transferOptIn(hello.Info))
 		return old, nil, nil, true
 	}
 	if found := d.entries[id]; found != nil && !found.peer {
@@ -75,7 +79,8 @@ func (d *directory) installPeer(owner *session, hello *protocol.PeerHello, host 
 	item := &entry{lifetime: &ownership{id: id, token: randomID("owner"), destinations: map[string]bool{}}, peer: true, declaredGroups: append([]string(nil), hello.Groups...), attachment: owner, done: make(chan struct{})}
 	item.row = row{SessionID: id, Product: hello.Product, Name: name}
 	item.row.Groups = orderedPeerGroups(hello.Groups, privateGroup(item))
-	item.info = maps.Clone(hello.Info)
+	item.info = peerPublicInfo(hello.Info)
+	d.setTransferCapability(item, transferOptIn(hello.Info))
 	if old != nil {
 		delete(d.entries, old.row.SessionID)
 		d.end(old)
@@ -253,6 +258,7 @@ func (d *directory) publish(start *launch, owner *session, createdAt time.Time) 
 	}
 	item.claimed = false
 	item.attachment = owner
+	d.setTransferCapability(item, owner.supportsTransfer)
 	d.addConnected(item)
 	item.lifetime = &ownership{id: item.row.SessionID, token: randomID("owner"), destinations: map[string]bool{}}
 	if start.input != nil && item.parent != nil && !item.parent.ended {
@@ -486,6 +492,14 @@ func (d *directory) routeLocked(item *entry, method string, request routedReques
 }
 
 func (d *directory) end(item *entry) {
+	if item.transferCapable && item.transferDone != nil {
+		if item.attachment != nil {
+			empty := ""
+			item.attachment.transferKey.Store(&empty)
+		}
+		close(item.transferDone)
+		item.transferCapable = false
+	}
 	d.removeConnected(item)
 	item.traceMode = ""
 	item.traceVersion = ""

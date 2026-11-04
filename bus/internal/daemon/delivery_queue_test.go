@@ -73,7 +73,7 @@ func TestScheduledDeliveryReservesRecordCapacity(t *testing.T) {
 		frame := policyFrame(t, reader)
 		var input protocol.DeliveryRequest
 		must(t, json.Unmarshal(frame.Params, &input))
-		if input.MessageID != message || input.RunID != fmt.Sprintf("g/%d", 256+index) || len(s.pending) != 1 {
+		if input.MessageID != message || input.RunID != fmt.Sprintf("g/%d", 256+index) || len(s.pending)+len(s.queued) != 1 {
 			t.Fatalf("queue order or run reservation lost: %+v", input)
 		}
 		s.receiveResponse(protocol.Frame{ID: frame.ID, Result: json.RawMessage(`{"disposition":"injected"}`)})

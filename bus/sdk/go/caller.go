@@ -10,7 +10,10 @@ import (
 )
 
 type callFunc func(context.Context, string, any, any) error
-type Caller struct{ call callFunc }
+type Caller struct {
+	call      callFunc
+	transfers *Transfers
+}
 type WaitRequest = protocol.WaitRequest
 
 func newCaller(call callFunc) *Caller {
@@ -25,6 +28,14 @@ func NewCaller(call func(context.Context, string, any) (json.RawMessage, error))
 		}
 		return protocol.UnmarshalResult(method, raw, result)
 	})
+}
+
+// NewCallerWithTransfers binds local tool actions to the SDK-owned executor.
+// Paths are consumed here and never passed to the generic wire-call callback.
+func NewCallerWithTransfers(call func(context.Context, string, any) (json.RawMessage, error), transfers *Transfers) *Caller {
+	caller := NewCaller(call)
+	caller.transfers = transfers
+	return caller
 }
 
 func callAs[T any](ctx context.Context, call callFunc, method string, params any) (T, error) {

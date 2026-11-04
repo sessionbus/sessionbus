@@ -288,7 +288,7 @@ func TestReadStopsBeforeBufferedRequestAfterClose(t *testing.T) {
 			c := &Conn{
 				fd: local, reader: bufio.NewReader(strings.NewReader(buffered)), client: true,
 				ctx: ctx, cancel: cancel,
-				pending: map[int64]pending{1: {method: "session.hello", result: &struct{}{}, done: make(chan error, 1), seen: test.seen}},
+				pending: map[int64]*pending{1: {method: "session.hello", result: &struct{}{}, done: make(chan error, 1), seen: test.seen}},
 				handler: func(context.Context, *Request) { t.Error("buffered request dispatched after closure") },
 			}
 			// Run the actual reader synchronously: assertions follow reader exit,

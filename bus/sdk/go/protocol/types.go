@@ -59,6 +59,7 @@ type HelloDescription struct {
 }
 
 type WorkerHello struct {
+	SupportsTransfer bool    `json:"supports_transfer,omitempty"`
 	Protocol         Integer `json:"protocol"`
 	LaunchToken      string  `json:"launch_token"`
 	HelloDescription `tstype:",extends"`
@@ -276,3 +277,108 @@ type RPCError struct {
 }
 
 func (e *RPCError) Error() string { return e.Message }
+
+type HelloResult struct {
+	Capabilities []string `json:"capabilities,omitempty"`
+}
+
+type TransferOffer struct {
+	Target string `json:"target"`
+	Name   string `json:"name"`
+}
+
+type TransferRequest struct {
+	Target string `json:"target"`
+	What   string `json:"what"`
+	Name   string `json:"name,omitempty"`
+}
+
+type TransferTarget struct {
+	ID string `json:"id"`
+}
+
+type TransferAccept struct {
+	ID   string   `json:"id"`
+	Size *Integer `json:"size,omitempty"`
+}
+
+// A descriptor is live state only. Nothing in this type is a filesystem path or
+// an endpoint-supplied identity assertion.
+type TransferDescriptor struct {
+	ID        string   `json:"id"`
+	Sender    string   `json:"sender"`
+	Receiver  string   `json:"receiver"`
+	Name      string   `json:"name"`
+	Size      *Integer `json:"size,omitempty"`
+	CreatedBy string   `json:"created_by"`
+	State     string   `json:"state"`
+	Bytes     Integer  `json:"bytes"`
+}
+
+type TransferPrepare struct {
+	ID   string   `json:"id"`
+	Role string   `json:"role"`
+	Size *Integer `json:"size,omitempty"`
+}
+
+type TransferPrepared struct {
+	ID    string   `json:"id"`
+	Size  *Integer `json:"size,omitempty"`
+	Ready bool     `json:"ready,omitempty"`
+}
+
+type TransferStart struct {
+	ID     string   `json:"id"`
+	Role   string   `json:"role"`
+	Size   Integer  `json:"size"`
+	Credit *Integer `json:"credit,omitempty"`
+}
+
+type TransferStarted struct {
+	ID      string `json:"id"`
+	Ready   bool   `json:"ready,omitempty"`
+	Started bool   `json:"started,omitempty"`
+}
+
+type TransferChunk struct {
+	ID     string  `json:"id"`
+	Offset Integer `json:"offset"`
+	Data   string  `json:"data"`
+}
+
+type TransferCredit struct {
+	Offset Integer `json:"offset"`
+}
+
+type TransferFinish struct {
+	ID     string  `json:"id"`
+	Bytes  Integer `json:"bytes"`
+	SHA256 string  `json:"sha256"`
+}
+
+// TransferFailure is machine-only and must precede requesting publication.
+type TransferFailure struct {
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
+}
+
+type TransferTerminal struct {
+	ID      string  `json:"id"`
+	Outcome string  `json:"outcome"`
+	Bytes   Integer `json:"bytes"`
+	SHA256  string  `json:"sha256,omitempty"`
+	Reason  string  `json:"reason,omitempty"`
+}
+
+type TransferNotice struct {
+	Kind    string          `json:"kind"`
+	ID      string          `json:"id"`
+	From    *DeliverySource `json:"from,omitempty"`
+	Name    string          `json:"name,omitempty"`
+	What    string          `json:"what,omitempty"`
+	Size    *Integer        `json:"size,omitempty"`
+	Outcome string          `json:"outcome,omitempty"`
+	Bytes   *Integer        `json:"bytes,omitempty"`
+	SHA256  string          `json:"sha256,omitempty"`
+	Reason  string          `json:"reason,omitempty"`
+}
