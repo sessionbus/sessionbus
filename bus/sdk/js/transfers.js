@@ -42,9 +42,9 @@ class Transfers {
     this.executor = executor; this.pending = 0; this.active = 0; this.generations = new Set();
   }
   attach(wire, signal, enabled) {
-    if (this.current?.wire === wire && this.current.enabled === enabled && !this.current.controller.signal.aborted) return;
+    if (this.current?.wire === wire && this.current.enabled === enabled && !this.current.controller.signal.aborted) return this.current;
     this.current?.controller.abort();
-    if (!enabled) { this.current = null; return; }
+    if (!enabled) { this.current = null; return null; }
     const controller = new AbortController();
     const g = { wire, controller, enabled, bindings: new Map(), creating: new Set(), finished: deferred() };
     this.current = g; this.generations.add(g);
@@ -61,6 +61,7 @@ class Transfers {
       })();
     }, { once: true });
     if (signal?.aborted || wire.signal.aborted) abort();
+    return g;
   }
   _generation() {
     const g = this.current;
@@ -70,7 +71,18 @@ class Transfers {
   async helloObserved(wire, identity, generationSignal, signal, seen) {
     const hello = { protocol: 1, ...identity, info: { ...identity.info, sessionbus_transfer: 1 } };
     return wire.call("session.hello", hello, signal, result => {
-      seen?.(); this.attach(wire, generationSignal, result.capabilities?.includes(CAPABILITY) === true);
+      if (generationSignal?.aborted) throw generationSignal.reason || new Error("aborted");
+      const enabled = result.capabilities?.includes(CAPABILITY) === true;
+      const attached = this.attach(wire, generationSignal, enabled);
+      if (enabled && (!attached || attached.controller.signal.aborted)) throw unsupported();
+      try { seen?.(); }
+      catch (error) {
+        if (attached) {
+          if (this.current === attached) this.current = null;
+          attached.controller.abort(error);
+        }
+        throw error;
+      }
     });
   }
   _reserve(g, b, hasPath = true) {

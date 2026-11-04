@@ -100,8 +100,11 @@ no test count or admission budget is a production memory/permission guarantee.
 Custom adapters can return ErrTransferCommitUnknown when publication's
 answer is lost. This is distinct from confirmed non-publication and confirmed
 publication (including post-publication cleanup failure). The SDK reports
-UNKNOWN and does not run destructive Abort or retry publication; its unknown
-cleanup remains charged until generation end. Native child file FDs count within
+UNKNOWN and does not run destructive Abort or retry publication. Terminal handling
+joins admitted I/O/workers and retires the SDK binding/slot before acknowledging
+resource retirement. Custom executors must close/join their owned resources during
+terminal cleanup; an UNKNOWN Commit result must relinquish them before returning
+because Abort will not be called. Native child file FDs count within
 the same aggregate four; executor processes, control pipes and bounded JSON must
 also have explicit adapter resource costs. Raw Connection brokers have an
 exported observed-hello/routing hook with the same negotiated generation lifetime.
@@ -153,7 +156,8 @@ a later directory rename/replacement may leave an explicitly reported owned-temp
 cleanup failure, never a silently successful cleanup. Default Go uses at most
 three filesystem FDs for both roles, JavaScript at most three. Cancellation
 closes owned handles/temp, never the published destination. Duplicate Commit
-cannot republish, and UNKNOWN/custom adapter behavior remains unchanged.
+cannot republish. UNKNOWN still forbids destructive Abort or publication retry;
+terminal retirement follows the joined-resource contract above.
 
 DEV1 F1/F2 findings correct live duplicate accept and pending expiry. Concurrent
 same-binding accepts share the first preparation/start/holds and return its live
