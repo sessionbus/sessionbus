@@ -57,7 +57,8 @@ func TestSameWireHelloUsesNativeIdentityLifetime(t *testing.T) {
 		context.Context
 		values []string
 	}
-	metadata := nonComparableContext{context.WithValue(a, struct{}{}, "metadata"), []string{"unchanged lifetime"}}
+	type metadataKey struct{}
+	metadata := nonComparableContext{context.WithValue(a, metadataKey{}, "metadata"), []string{"unchanged lifetime"}}
 	if err := transfers.HelloObserved(ctx, metadata, wire, identity, nil); err != nil {
 		t.Fatal(err)
 	}
