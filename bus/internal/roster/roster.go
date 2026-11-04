@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-// Package roster defines the read-only, same-user operator projection.
+// Package roster defines the same-user operator projection and local archive envelope.
 // It deliberately does not reuse SessionSummary.Info or native Open options.
 package roster
 

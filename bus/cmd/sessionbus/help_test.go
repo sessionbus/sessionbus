@@ -11,7 +11,7 @@ import (
 func TestHelpCommandsDoNotStartDaemonOrReadSecret(t *testing.T) {
 	t.Setenv("SESSIONBUS_HUB", "invalid:1")
 	t.Setenv("SESSIONBUS_HUB_SECRET_FILE", "/not-present/private-secret")
-	for _, args := range [][]string{{"--help"}, {"-h"}, {"help"}, {"help", "roster"}, {"roster", "--help"}, {"secret", "--help"}, {"help", "secret"}} {
+	for _, args := range [][]string{{"--help"}, {"-h"}, {"help"}, {"help", "roster"}, {"roster", "--help"}, {"secret", "--help"}, {"help", "secret"}, {"help", "lane", "archive"}, {"lane", "archive", "--help"}} {
 		var out bytes.Buffer
 		if err := runTo(args, &out); err != nil {
 			t.Fatalf("%v: %v", args, err)

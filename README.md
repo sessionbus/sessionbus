@@ -183,7 +183,29 @@ For caller-scoped protocol access, the reference caller remains available:
 sessionbus-call -g YOUR_GROUP session.list '{}'
 ```
 
-Use `sessionbus --help`, `sessionbus help roster`, `sessionbus help secret`,
+To stop a managed lane locally while keeping its native history and resume recipe:
+
+```sh
+sessionbus lane archive native-session-id@host
+sessionbus lane archive --socket /path/to/presence.sock native-session-id@host
+```
+
+This same-user operator command needs no live model, former owner, or peer-group
+membership and can close an ownerless persistent lane. It accepts an exact local
+ID, not a name or remote host. Its JSON result reports an `offline` snapshot after
+the targeted wrapper has stopped; a later explicit resume can reconnect the ID.
+Archiving an already-offline retained lane succeeds without changing it. Missing
+IDs, non-lane peers and lanes currently opening/closing return explicit errors.
+Normal close policy also initiates cleanup of nonpersistent children; persistent
+children remain, and the reply is not a recursive child-process join. Native close
+may append legitimate history records; the command never edits native history or
+forgets the saved recipe. It does not recover old Run results or resume work.
+The default total wait is 15 seconds (`--timeout` changes the client wait only).
+A timeout or lost reply leaves the outcome unknown while an admitted close can
+continue; the command does not retry. The existing roster request and ordinary
+group-restricted public `session.close` behavior are unchanged.
+
+Use `sessionbus --help`, `sessionbus help roster`, `sessionbus help lane archive`, `sessionbus help secret`,
 `sessionbus-hub --help`, or `sessionbus-hub add-host --help` for the actual CLI
 commands and flags. These help commands do not start services or alter keys.
 
