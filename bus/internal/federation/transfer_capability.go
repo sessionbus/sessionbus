@@ -13,9 +13,11 @@ const TransferALPN = "sessionbus-transfer/1"
 
 func SupportsTransfer(fd net.Conn) bool {
 	c, ok := fd.(*tls.Conn)
-	return ok && c.ConnectionState().NegotiatedProtocol == TransferALPN
+	return ok && (c.ConnectionState().NegotiatedProtocol == TransferALPN || c.ConnectionState().NegotiatedProtocol == AvailabilityALPN)
 }
 
-func supportsWakeProtocol(p string) bool   { return p == TransferALPN || p == WakeALPN }
+func supportsWakeProtocol(p string) bool {
+	return p == AvailabilityALPN || p == TransferALPN || p == WakeALPN
+}
 func supportsTraceProtocol(p string) bool  { return supportsWakeProtocol(p) || p == TraceALPN }
 func supportsRosterProtocol(p string) bool { return supportsTraceProtocol(p) || p == RosterALPN }

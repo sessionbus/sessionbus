@@ -22,6 +22,7 @@ var ErrCapacity = errors.New("frame writer capacity exhausted")
 // must not wait on disk, credit, a response, or a connection-owner event loop.
 // Request=false keeps the original reply ID inside Build; the supplied ID is0.
 type Job struct {
+	Probe         bool // One small reserved liveness request; never bulk or a reply.
 	Stream        string
 	Bulk, Request bool
 	Weight        int
@@ -39,6 +40,8 @@ func (j *Job) complete(err error) {
 }
 
 type Queue struct {
+	probe                   *Job
+	currentProbe            bool
 	currentBulk             bool
 	currentBulkBytes        int
 	lastBulkStream          string
@@ -71,6 +74,9 @@ func (q *Queue) Submit(j *Job) error {
 	if j.Bulk && j.Weight > protocol.MaxTransferFrameBytes || !j.Bulk && j.Weight > protocol.MaxFrameBytes {
 		return ErrCapacity
 	}
+	if j.Probe && (j.Bulk || !j.Request || j.Weight > 128) {
+		return ErrCapacity
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.submitLocked(j)
@@ -80,7 +86,12 @@ func (q *Queue) submitLocked(j *Job) error {
 	if q.closed != nil {
 		return q.closed
 	}
-	if j.Bulk {
+	if j.Probe {
+		if q.probe != nil || q.currentProbe {
+			return ErrCapacity
+		}
+		q.probe = j
+	} else if j.Bulk {
 		if len(q.bulk)+boolInt(q.currentBulk) >= 4 || q.bulkBytes+q.currentBulkBytes+j.Weight > 4*protocol.MaxTransferFrameBytes {
 			return ErrCapacity
 		}
@@ -104,7 +115,7 @@ func (q *Queue) submitLocked(j *Job) error {
 // It adds no retained frame/correlation beyond the caller's existing reservation;
 // bulk admission remains nonblocking and never consumes control slots.
 func (q *Queue) SubmitWait(ctx context.Context, j *Job) error {
-	if j == nil || j.Build == nil || j.Weight < 0 || j.Bulk || j.Weight > protocol.MaxFrameBytes {
+	if j == nil || j.Build == nil || j.Weight < 0 || j.Bulk || j.Probe || j.Weight > protocol.MaxFrameBytes {
 		return ErrCapacity
 	}
 	for {
@@ -132,7 +143,9 @@ func (q *Queue) take() (*Job, int64, error) {
 		return nil, 0, q.closed
 	}
 	var j *Job
-	if len(q.control) > 0 && (q.burst < 8 || len(q.bulk) == 0) {
+	if q.probe != nil {
+		j, q.probe, q.currentProbe = q.probe, nil, true
+	} else if len(q.control) > 0 && (q.burst < 8 || len(q.bulk) == 0) {
 		j = q.control[0]
 		q.control[0] = nil
 		q.control = q.control[1:]
@@ -233,6 +246,10 @@ func (q *Queue) Close(cause error) {
 	q.closed = cause
 	q.signalSpaceLocked()
 	pending := append(q.control, q.bulk...)
+	if q.probe != nil {
+		pending = append(pending, q.probe)
+	}
+	q.probe = nil
 	q.control = nil
 	q.bulk = nil
 	q.controlBytes = 0
@@ -268,6 +285,12 @@ func writeFull(w io.Writer, b []byte) error {
 }
 
 func (q *Queue) finishSelected(j *Job) {
+	if j.Probe {
+		q.mu.Lock()
+		q.currentProbe = false
+		q.signalSpaceLocked()
+		q.mu.Unlock()
+	}
 	if !j.Bulk {
 		return
 	}

@@ -22,11 +22,12 @@
         "extra_arguments": {"type": "array", "items": {"$ref": "#/$defs/ExtraArgument"}},
         "version": {"type": "string", "minLength": 1},
         "supports_message_run": {"type":"boolean"},
-        "supports_transfer": {"type":"boolean","const":true}
+        "supports_transfer": {"type":"boolean","const":true},
+        "supports_availability": {"type":"boolean","const":true}
       },
-      "allOf": [{"if":{"required":["launch_token"]},"then":{"allOf":[{"required":["launch_token","supported_open_fields","extra_arguments"]},{"not":{"required":["session_id"]}},{"not":{"required":["name"]}},{"not":{"required":["groups"]}},{"not":{"required":["info"]}}]},"else":{"allOf":[{"required":["session_id","groups","info"]},{"not":{"required":["supported_open_fields"]}},{"not":{"required":["supports_message_run"]}},{"not":{"required":["supports_transfer"]}},{"not":{"required":["extra_arguments"]}},{"not":{"required":["version"]}}]}}]
+      "allOf": [{"if":{"required":["launch_token"]},"then":{"allOf":[{"required":["launch_token","supported_open_fields","extra_arguments"]},{"not":{"required":["session_id"]}},{"not":{"required":["name"]}},{"not":{"required":["groups"]}},{"not":{"required":["info"]}}]},"else":{"allOf":[{"required":["session_id","groups","info"]},{"not":{"required":["supported_open_fields"]}},{"not":{"required":["supports_message_run"]}},{"not":{"required":["supports_transfer"]}},{"not":{"required":["supports_availability"]}},{"not":{"required":["extra_arguments"]}},{"not":{"required":["version"]}}]}}]
     },
-    "SessionHelloResult": {"type":"object","additionalProperties":false,"properties":{"capabilities":{"type":"array","uniqueItems":true,"items":{"enum":["transfer/1"]}}}},
+    "SessionHelloResult": {"type":"object","additionalProperties":false,"properties":{"capabilities":{"type":"array","uniqueItems":true,"items":{"enum":["transfer/1","availability/1"]}}}},
     "SessionSupersededRequest": {"type": "object", "additionalProperties": false},
     "SessionSupersededResult": {"type": "object", "additionalProperties": false},
     "SessionListRequest": {
@@ -54,6 +55,7 @@
       "additionalProperties": false,
       "required": ["host", "products"],
       "properties": {
+        "availability": {"enum": ["not_responding"]},
         "host": {"type": "string", "minLength": 1},
         "products": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
       }

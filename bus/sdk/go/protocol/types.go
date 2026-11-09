@@ -59,10 +59,11 @@ type HelloDescription struct {
 }
 
 type WorkerHello struct {
-	SupportsTransfer bool    `json:"supports_transfer,omitempty"`
-	Protocol         Integer `json:"protocol"`
-	LaunchToken      string  `json:"launch_token"`
-	HelloDescription `tstype:",extends"`
+	SupportsAvailability bool    `json:"supports_availability,omitempty"`
+	SupportsTransfer     bool    `json:"supports_transfer,omitempty"`
+	Protocol             Integer `json:"protocol"`
+	LaunchToken          string  `json:"launch_token"`
+	HelloDescription     `tstype:",extends"`
 }
 
 // PeerHello is a complete identity assertion; an empty Name omits the native name.
@@ -171,8 +172,9 @@ type DeliveryReceipt struct {
 }
 
 type HostProducts struct {
-	Host     string   `json:"host"`
-	Products []string `json:"products"`
+	Availability string   `json:"availability,omitempty"`
+	Host         string   `json:"host"`
+	Products     []string `json:"products"`
 }
 
 type SessionSummary struct {

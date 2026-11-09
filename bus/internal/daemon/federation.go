@@ -11,6 +11,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"net"
+	"os"
 	"slices"
 	"sort"
 	"time"
@@ -106,10 +107,9 @@ func (d *Daemon) connectFederation() error {
 func (d *Daemon) reconnectFederation(ctx context.Context, configuration *tls.Config) {
 	defer d.group.Done()
 	delay := federationRetryMin
-	dialer := tls.Dialer{NetDialer: &net.Dialer{Timeout: federationDialTimeout}, Config: configuration}
 	for ctx.Err() == nil {
 		attemptCtx, cancel := context.WithTimeout(ctx, federationDialTimeout)
-		fd, err := dialer.DialContext(attemptCtx, "tcp", d.config.HubAddress)
+		fd, err := dialFederation(attemptCtx, d.config.HubAddress, configuration, os.Stderr)
 		cancel()
 		if err == nil {
 			connected := time.Now()
@@ -135,6 +135,21 @@ func (d *Daemon) reconnectFederation(ctx context.Context, configuration *tls.Con
 		}
 		delay = min(delay*2, federationRetryMax)
 	}
+}
+
+func dialFederation(ctx context.Context, address string, configuration *tls.Config, log io.Writer) (*tls.Conn, error) {
+	dialer := net.Dialer{Timeout: federationDialTimeout}
+	raw, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return nil, err
+	}
+	federation.ConfigureTCP(raw, log)
+	fd := tls.Client(raw, configuration)
+	if err := fd.HandshakeContext(ctx); err != nil {
+		_ = raw.Close()
+		return nil, err
+	}
+	return fd, nil
 }
 
 func settleFederationQueue(inbox chan any) {
@@ -170,7 +185,11 @@ func (d *directory) postFederation(value any) int {
 	case d.daemon.federation.inbox <- value:
 		return 0
 	default:
-		d.daemon.federation.cancel()
+		switch value.(type) {
+		case federation.OutgoingCall, federation.HostsCall, federation.RosterCall:
+		default:
+			d.daemon.federation.cancel()
+		}
 		return protocol.ForwardLost
 	}
 }
@@ -195,7 +214,7 @@ func (s *session) federationCaller() federation.Caller {
 	if s.identity.lifetime != nil {
 		token = s.identity.lifetime.token
 	}
-	return federation.Caller{OwnerLifetime: token, SessionID: s.identity.row.SessionID, Name: s.identity.row.Name,
+	return federation.Caller{Availability: s.supportsAvailability, OwnerLifetime: token, SessionID: s.identity.row.SessionID, Name: s.identity.row.Name,
 		Product: s.identity.row.Product, PrivateGroup: privateGroup(s.identity), Groups: append([]string(nil), s.identity.row.Groups...)}
 }
 
@@ -220,7 +239,7 @@ func (s *session) forward(frame protocol.Frame, targetID string) {
 		s.error(frame, code, nil)
 		return
 	}
-	s.requests[frame.ID] = &requestState{frame: frame, targetID: targetID}
+	s.requests[frame.ID] = &requestState{frame: frame, targetID: targetID, availability: caller.Availability}
 	if frame.Method == "session.list" {
 		s.requests[frame.ID].selfInfo = listSelfInfo(caller)
 	}
@@ -270,12 +289,14 @@ func (s *session) remoteResponse(frame protocol.Frame, reply federation.Reply) {
 
 func (s *session) listFederated(frame protocol.Frame) bool {
 	hosts := make(chan federation.Reply, 1)
-	if code := s.postAggregate(frame, federation.HostsCall{Reply: hosts}); code != 0 {
-		return code != protocol.UnknownHost
+	if code := s.daemon.directory.postFederation(federation.HostsCall{Reply: hosts}); code != 0 {
+		// No remote work or request state was admitted. Keep the ordinary
+		// confirmed local list without first emitting a conflicting error.
+		return false
 	}
 	caller, lifetime := s.federationCaller(), s.identity.done
 	local := s.daemon.directory.forwardLocal(caller, s.identity, "session.list", &protocol.SessionListRequest{Host: s.daemon.host}, "")
-	s.requests[frame.ID] = &requestState{frame: frame}
+	s.requests[frame.ID] = &requestState{frame: frame, availability: caller.Availability}
 	s.owned++
 	go func() {
 		value := s.collectFederatedList(caller, local, hosts, lifetime)
@@ -293,6 +314,18 @@ func (s *session) collectFederatedList(caller federation.Caller, local federatio
 	}
 	names, err := federation.DecodeHosts(hostReply)
 	if err != nil {
+		if hostReply.Error != nil && hostReply.Error.Code == protocol.ForwardLost {
+			localReply, ok := local(lifetime)
+			if !ok {
+				return answer{code: protocol.NotConnected}
+			}
+			value := remoteAnswer("session.list", localReply)
+			if value.code == 0 {
+				value.value.(*protocol.SessionListResult).SelfInfo = listSelfInfo(caller)
+				value.remote = nil
+			}
+			return value
+		}
 		if hostReply.Error != nil {
 			return answer{code: hostReply.Error.Code}
 		}
@@ -305,7 +338,7 @@ func (s *session) collectFederatedList(caller federation.Caller, local federatio
 		call := federation.OutgoingCall{Value: federation.Forward{From: caller,
 			Request: federation.PublicRequest{Method: "session.list", Params: params}}, Reply: replies[index]}
 		if code := s.daemon.directory.postFederation(call); code != 0 {
-			return answer{code: protocol.ForwardLost}
+			replies[index] <- federation.Reply{Error: &protocol.RPCError{Code: protocol.ForwardLost, Message: "forward_lost"}}
 		}
 	}
 	localReply, ok := local(lifetime)
@@ -327,6 +360,11 @@ func (s *session) collectFederatedList(caller federation.Caller, local federatio
 		}
 		value := remoteAnswer("session.list", remote)
 		if value.code != 0 {
+			if value.code == protocol.ForwardLost {
+				// Capacity and admission failures share this uncertainty code.
+				// Only a successful marked-silent result can supply availability.
+				continue
+			}
 			return answer{code: protocol.ForwardLost}
 		}
 		listed := value.value.(*protocol.SessionListResult)
@@ -586,7 +624,6 @@ func (d *directory) postCallerForward(s *session, call federation.OutgoingCall, 
 	case d.daemon.federation.inbox <- call:
 		return 0
 	default:
-		d.daemon.federation.cancel()
 		return protocol.ForwardLost
 	}
 }

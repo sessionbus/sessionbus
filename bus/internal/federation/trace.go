@@ -118,6 +118,9 @@ func encodeTraceReply(reply Reply) ([]byte, error) {
 			return nil, errFrame
 		}
 		seen[key] = struct{}{}
+		// Availability is the originating request's opt-in, never trace-owner
+		// identity. Keep the legacy owner envelope even over a new link.
+		recipient.Owner.Availability = false
 		envelope.Trace[index], _ = json.Marshal(recipient)
 	}
 	value, err := json.Marshal(envelope)

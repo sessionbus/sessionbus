@@ -39,6 +39,16 @@ servers supply the originating caller even when filters exclude its session row.
 The identity comes from the bound connection; never infer it from list order or
 name matching.
 
+`HostProducts.availability` is optional. Its current value `not_responding`
+means a federation leg did not answer the daemon's own probes; its sessions are
+omitted and `products` is empty. A missing field does not prove responsiveness:
+older hops or non-opting callers receive the previous result shape. A partial
+list preserves confirmed rows and does not claim a complete federation roster.
+The kit declares `sessionbus_availability:1` in peer Info automatically. Current
+daemons hide it as transport metadata; an old daemon may expose this unknown Info
+key. Raw Connection owners must explicitly opt in. Worker hello opt-in uses only
+the daemon-issued `sbt1:av1:` token; callers do not choose a different token.
+
 To regenerate and check from a source checkout:
 
 ```sh

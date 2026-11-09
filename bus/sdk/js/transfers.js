@@ -70,7 +70,7 @@ class Transfers {
     return g;
   }
   async helloObserved(wire, identity, generationSignal, signal, seen) {
-    const hello = { protocol: 1, ...identity, info: { ...identity.info, sessionbus_transfer: 1 } };
+    const hello = { protocol: 1, ...identity, info: { ...identity.info, sessionbus_transfer: 1, sessionbus_availability: 1 } };
     return wire.call("session.hello", hello, signal, result => {
       if (generationSignal?.aborted) throw generationSignal.reason || new Error("aborted");
       const enabled = result.capabilities?.includes(CAPABILITY) === true;

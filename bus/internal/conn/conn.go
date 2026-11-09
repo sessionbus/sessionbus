@@ -107,9 +107,22 @@ func (c *Conn) Send(frame []byte) bool {
 // Request allocates its ID only after 8-control/1-bulk writer selection. Value
 // is the owner's queued correlation, charged at admission, not another copy.
 func (c *Conn) Request(bulk bool, value any, build func(int64) ([]byte, error), stream ...string) bool {
-	return c.request(bulk, value, build, false, stream...)
+	return c.request(bulk, value, build, requestOptions{}, stream...)
 }
-func (c *Conn) request(bulk bool, value any, build func(int64) ([]byte, error), finish bool, stream ...string) bool {
+
+type requestOptions struct{ finish, probe, refuse bool }
+
+// TryRequest refuses ordinary forwarding overflow without ending ownership.
+func (c *Conn) TryRequest(value any, build func(int64) ([]byte, error)) bool {
+	return c.request(false, value, build, requestOptions{refuse: true})
+}
+
+func (c *Conn) ProbeRequest(value any, build func(int64) ([]byte, error)) bool {
+	return c.request(false, value, build, requestOptions{probe: true, refuse: true})
+}
+
+func (c *Conn) request(bulk bool, value any, build func(int64) ([]byte, error), options requestOptions, stream ...string) bool {
+	finish := options.finish
 	if c.finishing && !finish {
 		return false
 	}
@@ -122,11 +135,14 @@ func (c *Conn) request(bulk bool, value any, build func(int64) ([]byte, error), 
 	if bulk {
 		weight = protocol.MaxTransferFrameBytes
 	}
+	if options.probe {
+		weight = 128
+	}
 	streamID := ""
 	if len(stream) > 0 {
 		streamID = stream[0]
 	}
-	job := &wirequeue.Job{Stream: streamID, Request: true, Bulk: bulk, Weight: weight, Build: func(id int64) ([]byte, error) {
+	job := &wirequeue.Job{Probe: options.probe, Stream: streamID, Request: true, Bulk: bulk, Weight: weight, Build: func(id int64) ([]byte, error) {
 		body, err := build(id)
 		if err != nil {
 			return nil, err
@@ -145,7 +161,7 @@ func (c *Conn) request(bulk bool, value any, build func(int64) ([]byte, error), 
 		}
 	}}
 	if err := c.writer.Submit(job); err != nil {
-		if !bulk {
+		if !bulk && !options.refuse {
 			c.Close()
 		}
 		return false
@@ -171,7 +187,7 @@ func (c *Conn) FinishRequest(build func(int64) ([]byte, error), bound time.Durat
 	}
 	c.finishing = true
 	_ = c.fd.SetWriteDeadline(time.Now().Add(bound))
-	return c.request(false, nil, build, true)
+	return c.request(false, nil, build, requestOptions{finish: true})
 }
 func (c *Conn) Close()       { _ = c.fd.Close(); c.writer.Close(wirequeue.ErrClosed) }
 func (c *Conn) OwnerClosed() { c.finishing = true; c.writer.Close(wirequeue.ErrClosed) }

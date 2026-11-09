@@ -11,7 +11,11 @@ import (
 // Opt-in asserts handler capability only. It grants neither product identity
 // nor permission; authenticated attachment/generation remains authoritative.
 func transferOptIn(info map[string]any) bool {
-	switch v := info[protocol.TransferInfoKey].(type) {
+	return capabilityOptIn(info, protocol.TransferInfoKey)
+}
+
+func capabilityOptIn(info map[string]any, key string) bool {
+	switch v := info[key].(type) {
 	case float64:
 		return v == 1
 	case int:
@@ -27,5 +31,6 @@ func transferOptIn(info map[string]any) bool {
 func peerPublicInfo(info map[string]any) map[string]any {
 	public := maps.Clone(info)
 	delete(public, protocol.TransferInfoKey)
+	delete(public, protocol.AvailabilityInfoKey)
 	return public
 }

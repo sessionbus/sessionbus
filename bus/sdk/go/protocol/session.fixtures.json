@@ -229,6 +229,11 @@
     {"name":"TransferTerminal valid","definition":"TransferTerminal","valid":true,"value":{"id":"x","outcome":"cancelled","bytes":0}},
     {"name":"TransferTerminal rejects path field","definition":"TransferTerminal","valid":false,"value":{"id":"x","outcome":"cancelled","bytes":0,"destination":"/never/on/wire"}},
     {"name":"TransferNotice valid","definition":"TransferNotice","valid":true,"value":{"kind":"terminal","id":"x","outcome":"cancelled","bytes":0}},
-    {"name":"TransferNotice rejects path field","definition":"TransferNotice","valid":false,"value":{"kind":"terminal","id":"x","outcome":"cancelled","bytes":0,"destination":"/never/on/wire"}}
+    {"name":"TransferNotice rejects path field","definition":"TransferNotice","valid":false,"value":{"kind":"terminal","id":"x","outcome":"cancelled","bytes":0,"destination":"/never/on/wire"}},
+    {"name":"availability hello capability","definition":"SessionHelloResult","valid":true,"value":{"capabilities":["availability/1"]}},
+    {"name":"availability host is not responding","definition":"HostProducts","valid":true,"value":{"host":"beta","products":[],"availability":"not_responding"}},
+    {"name":"availability does not invent other states","definition":"HostProducts","valid":false,"value":{"host":"beta","products":[],"availability":"unknown_host"}},
+    {"name":"availability worker token bootstrap","definition":"SessionHelloRequest","valid":true,"value":{"protocol":1,"product":"worker","launch_token":"sbt1:av1:test","supports_availability":true,"supported_open_fields":[],"extra_arguments":[]}},
+    {"name":"availability peer uses info not worker field","definition":"SessionHelloRequest","valid":false,"value":{"protocol":1,"product":"peer","session_id":"native","groups":[],"info":{},"supports_availability":true}}
   ]
 }

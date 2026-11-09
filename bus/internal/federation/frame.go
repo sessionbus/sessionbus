@@ -18,6 +18,7 @@ const (
 var errFrame = errors.New("invalid federation frame")
 
 type Caller struct {
+	Availability     bool     `json:"availability,omitempty"`
 	OwnerLifetime    string   `json:"owner_lifetime,omitempty"`
 	SourceAttachment string   `json:"source_attachment,omitempty"`
 	SessionID        string   `json:"session_id"`
@@ -43,10 +44,11 @@ type Forward struct {
 }
 
 type Reply struct {
-	Result   json.RawMessage
-	Error    *protocol.RPCError
-	ErrorRaw json.RawMessage
-	Trace    []TraceRecipient
+	Unavailable bool // Owner-local silence fact, never a new wire field/code.
+	Result      json.RawMessage
+	Error       *protocol.RPCError
+	ErrorRaw    json.RawMessage
+	Trace       []TraceRecipient
 }
 
 type hostsResult struct {

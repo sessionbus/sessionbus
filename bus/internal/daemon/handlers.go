@@ -7,19 +7,21 @@ import (
 	"strings"
 
 	"github.com/antst/sessionbus/bus/internal/commslog"
+	"github.com/antst/sessionbus/bus/internal/federation"
 	"github.com/antst/sessionbus/bus/sdk/go/protocol"
 )
 
 type requestState struct {
-	frame      protocol.Frame
-	target     *entry
-	targetID   string
-	held       *answer
-	pending    int
-	deliveries []protocol.MessageSendDelivery
-	messageID  string
-	aggregate  bool
-	selfInfo   *protocol.SessionSelfInfo
+	availability bool
+	frame        protocol.Frame
+	target       *entry
+	targetID     string
+	held         *answer
+	pending      int
+	deliveries   []protocol.MessageSendDelivery
+	messageID    string
+	aggregate    bool
+	selfInfo     *protocol.SessionSelfInfo
 }
 
 func (s *session) handleRequest(frame protocol.Frame, params any) {
@@ -110,9 +112,13 @@ func (s *session) peerHello(frame protocol.Frame, hello *protocol.PeerHello) {
 		displaced.wire.Close()
 	}
 	s.supportsTransfer = transferOptIn(hello.Info)
+	s.supportsAvailability = capabilityOptIn(hello.Info, protocol.AvailabilityInfoKey)
 	result := protocol.HelloResult{}
 	if s.supportsTransfer {
 		result.Capabilities = []string{protocol.TransferCapability}
+	}
+	if s.supportsAvailability {
+		result.Capabilities = append(result.Capabilities, protocol.AvailabilityCapability)
 	}
 	s.result(frame, result)
 }
@@ -418,6 +424,19 @@ func (s *session) consumeReply(event replyEvent) {
 
 func (s *session) finishRequest(id int64, state *requestState, result answer) {
 	delete(s.requests, id)
+	if state.frame.Method == "session.list" && result.code == 0 {
+		if result.remote != nil {
+			projected := federation.ProjectAvailability(state.frame.Method, *result.remote, state.availability)
+			result.remote = &projected
+		}
+		if !state.availability {
+			if listed, ok := result.value.(*protocol.SessionListResult); ok {
+				projected := *listed
+				projected.Hosts = federation.LegacyHostProducts(listed.Hosts)
+				result.value = &projected
+			}
+		}
+	}
 	s.logResult(state.frame, result.value, result.code)
 	s.finishTrace(state.frame, result.value, result.code, result.trace)
 	if result.code == 0 && state.selfInfo != nil {
