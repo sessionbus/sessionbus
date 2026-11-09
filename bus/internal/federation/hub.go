@@ -64,6 +64,7 @@ type registryEvent struct {
 }
 
 type hostLink struct {
+	liveness     linkLiveness
 	transfers    atomic.Pointer[hubTransfers]
 	transferBulk chan TransferCall
 	attachment   string
@@ -99,12 +100,14 @@ type incomingForward struct {
 }
 
 type originReply struct {
-	release     func()
-	origin      *hostLink
-	destination *hostLink
-	id          int64
-	value       Reply
-	collect     bool
+	method       string
+	availability bool
+	release      func()
+	origin       *hostLink
+	destination  *hostLink
+	id           int64
+	value        Reply
+	collect      bool
 }
 
 func StartHub(listener net.Listener, configuration *tls.Config, stderr io.Writer) *Hub {
@@ -258,6 +261,7 @@ func (s *hubState) handle(ctx context.Context, inbox chan<- registryEvent, event
 const hubHandshakeTimeout = 5 * time.Second
 
 func authenticate(ctx context.Context, raw net.Conn, configuration *tls.Config, registry chan<- registryEvent, log io.Writer) {
+	ConfigureTCP(raw, log)
 	fd := tls.Server(raw, configuration)
 	handshakeCtx, cancelHandshake := context.WithTimeout(ctx, hubHandshakeTimeout)
 	err := fd.HandshakeContext(handshakeCtx)
@@ -316,10 +320,19 @@ func (l *hostLink) run(accepted bool) {
 	queued := map[*pendingCall]bool{}
 	stopping := l.ctx.Done()
 	pending := map[int64]pendingCall{}
+	l.liveness.lastReply = time.Now()
+	var ticks <-chan time.Time
+	if SupportsRoster(l.fd) {
+		timer := time.NewTicker(probeInterval)
+		defer timer.Stop()
+		ticks = timer.C
+	}
 
 	for {
 		var raw any
 		select {
+		case at := <-ticks:
+			raw = livenessTick{at: at}
 		case <-stopping:
 			l.wire.Close()
 			failed, stopping = true, nil
@@ -334,16 +347,20 @@ func (l *hostLink) run(accepted bool) {
 		case raw = <-l.inbox:
 		}
 		switch event := raw.(type) {
+		case livenessTick:
+			if !failed && SupportsRoster(l.fd) {
+				l.liveness.tick(event.at, rosterMethod, l.wire, queued, pending)
+			}
 		case TransferCall:
 			if failed || !SupportsTransfer(l.fd) || !queueTransferCall(l.wire, queued, pending, event) {
 				event.Reply <- errorReply(protocol.Internal, "transfer_unavailable")
 			}
 		case outgoingRoster:
-			if failed || callCount(pending, queued, false) >= maxPendingForwardedPerHost {
+			if failed || l.liveness.silent.Load() || callCount(pending, queued, false) >= maxPendingForwardedPerHost {
 				event.reply <- errorReply(protocol.ForwardLost, nil)
 				continue
 			}
-			if !queueCall(l.wire, queued, pendingCall{method: rosterMethod, reply: event.reply}, false, func(id int64) ([]byte, error) { return requestBytes(id, rosterMethod, struct{}{}) }) {
+			if !queueCall(l.wire, queued, pendingCall{forwarded: true, method: rosterMethod, reply: event.reply}, false, func(id int64) ([]byte, error) { return requestBytes(id, rosterMethod, struct{}{}) }) {
 				event.reply <- errorReply(protocol.ForwardLost, nil)
 				continue
 			}
@@ -362,6 +379,14 @@ func (l *hostLink) run(accepted bool) {
 			}
 		case outgoingForward:
 			request := event.value.Request
+			capable := event.value.From.Availability && SupportsAvailability(l.fd)
+			event.value.From.Availability = capable
+			if l.liveness.silent.Load() {
+				p := pendingCall{method: request.Method, availability: capable}
+				p.target, _ = targetHost(request)
+				event.reply <- silenceReply(&p)
+				continue
+			}
 			if request.Completion && !SupportsWake(l.fd) {
 				event.reply <- errorReply(protocol.ForwardLost, nil)
 				continue
@@ -376,10 +401,6 @@ func (l *hostLink) run(accepted bool) {
 			}
 			if failed || callCount(pending, queued, false) >= maxPendingForwardedPerHost {
 				event.reply <- errorReply(protocol.ForwardLost, nil)
-				if callCount(pending, queued, false) >= maxPendingForwardedPerHost {
-					l.wire.Close()
-					failed = true
-				}
 				continue
 			}
 			_, forwarded, err := forwardRequestBytes(1, event.value)
@@ -389,9 +410,8 @@ func (l *hostLink) run(accepted bool) {
 				event.reply <- errorReply(protocol.InvalidFrame, "forwarded request exceeds the frame limit")
 				continue
 			}
-			if !queueCall(l.wire, queued, pendingCall{method: request.Method, reply: event.reply, trace: request.Trace, target: target}, false, func(id int64) ([]byte, error) { body, _, err := forwardRequestBytes(id, forwarded); return body, err }) {
+			if !queueCall(l.wire, queued, pendingCall{forwarded: true, availability: capable, method: request.Method, reply: event.reply, trace: request.Trace, target: target}, false, func(id int64) ([]byte, error) { body, _, err := forwardRequestBytes(id, forwarded); return body, err }) {
 				event.reply <- errorReply(protocol.ForwardLost, nil)
-				failed = true
 				continue
 			}
 		case originReply:
@@ -469,7 +489,10 @@ func (l *hostLink) frame(event conn.Frame, pending map[int64]pendingCall, lastIn
 			return errFrame
 		}
 		delete(pending, frame.ID)
-		call.reply <- reply
+		if call.probe != nil {
+			call.probe.replied()
+		}
+		notifyCall(&call, reply)
 		return nil
 	}
 	if !event.Ordered && frame.ID <= *lastIn {
@@ -521,6 +544,9 @@ func (l *hostLink) frame(event conn.Frame, pending map[int64]pendingCall, lastIn
 		return errFrame
 	}
 	value, host, err := decodeForward(frame.Params, l.host)
+	if err == nil && value.From.Availability && !SupportsAvailability(l.fd) {
+		return errFrame
+	}
 	if err == nil && value.From.SourceAttachment != "" {
 		return errFrame
 	}
@@ -533,7 +559,7 @@ func (l *hostLink) frame(event conn.Frame, pending map[int64]pendingCall, lastIn
 func settlePending(pending map[int64]pendingCall) {
 	for id, call := range pending {
 		delete(pending, id)
-		call.reply <- errorReply(protocol.ForwardLost, nil)
+		notifyCall(&call, errorReply(protocol.ForwardLost, nil))
 	}
 }
 
@@ -589,6 +615,12 @@ func (s *hubState) forward(ctx context.Context, inbox chan<- registryEvent, orig
 		s.reply(originReply{origin: origin, id: call.id, value: errorReply(protocol.UnknownHost, nil)})
 		return
 	}
+	availability := call.value.From.Availability && SupportsAvailability(origin.fd)
+	if destination.liveness.silent.Load() {
+		p := pendingCall{method: call.value.Request.Method, target: call.host, availability: availability}
+		s.reply(originReply{origin: origin, id: call.id, value: silenceReply(&p), method: call.value.Request.Method, availability: availability})
+		return
+	}
 	if call.value.Request.Completion && !SupportsWake(destination.fd) {
 		s.reply(originReply{origin: origin, id: call.id, value: errorReply(protocol.ForwardLost, nil)})
 		return
@@ -602,17 +634,20 @@ func (s *hubState) forward(ctx context.Context, inbox chan<- registryEvent, orig
 		call.value.Request.Trace = false
 	}
 	call.value.From.SourceAttachment = origin.attachment
+	call.value.From.Availability = availability && SupportsAvailability(destination.fd)
 	reply := make(chan Reply, 1)
 	if !destination.wire.Post(outgoingForward{call.value, reply}) {
 		reply <- errorReply(protocol.ForwardLost, nil)
-		s.remove(destination)
 	}
 	s.group.Add(1)
 	go func() {
 		defer s.group.Done()
 		select {
 		case value := <-reply:
-			postRegistry(ctx, inbox, registryEvent{kind: registryReply, reply: &originReply{origin: origin, destination: destination, id: call.id, value: value, collect: collect}})
+			if value.Unavailable && call.value.Request.Method == "session.list" {
+				value = unavailableList(call.host, availability)
+			}
+			postRegistry(ctx, inbox, registryEvent{kind: registryReply, reply: &originReply{origin: origin, destination: destination, id: call.id, value: value, collect: collect, method: call.value.Request.Method, availability: availability}})
 		case <-origin.done:
 		case <-ctx.Done():
 		}
@@ -620,6 +655,7 @@ func (s *hubState) forward(ctx context.Context, inbox chan<- registryEvent, orig
 }
 
 func (s *hubState) reply(event originReply) {
+	event.value = ProjectAvailability(event.method, event.value, event.availability && SupportsAvailability(event.origin.fd))
 	if event.collect {
 		if event.value.Trace == nil {
 			event.value.Trace = []TraceRecipient{}

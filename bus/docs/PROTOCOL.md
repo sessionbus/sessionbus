@@ -956,6 +956,61 @@ exact generation's transfers with the same publication/UNKNOWN rules. Ordinary
 peer reconnect proceeds while old cleanup remains charged; executor disposal
 joins owned cleanup. No transfer invents a Run or forces a native wake.
 
+### 1.7 Federation responsiveness
+
+Each supported federation attachment probes independently: hub to host uses the
+existing roster request (only after roster ALPN negotiation), host to hub uses
+the existing hosts request. A probe is due every five seconds, with at most one
+queued or dispatched probe per attachment. Fifteen seconds without a valid own
+probe reply marks that attachment not responding. This is application-path
+responsiveness, not evidence that a native worker stopped or a message was never
+consumed. A healthy indefinite Run or wait has no new total deadline.
+
+A mark releases ordinary forwarded waiters once with existing `forward_lost`;
+message sends retain their existing `rejected/no_receipt` uncertainty. It does
+not close the link, end an owner, cancel remote work, replay, acknowledge a Run,
+or change transfer publication knowledge. Its correlations remain charged until
+the actual reply or link end; late replies are validated and drained. New calls
+to a marked attachment refuse immediately. A valid retained probe reply clears
+the mark on that attachment. It never changes an already-returned answer.
+
+The ordinary queued-plus-pending limit remains 256, with four independent bulk
+correlations and one reserved small probe. Ordinary forward, roster and hosts
+overflow refuses without closing. Existing owner-end/host-end cleanup that
+cannot queue still closes through link loss. Healthy long waits can already fill
+the retained cap before silence; marking prevents new admissions, not prior
+charges. Probes cannot bypass an actual blocked write, reader, inbox or reply
+queue. Saturation of those existing paths can still close a link.
+
+`sessionbus-availability/1` is an ALPN superset of transfer, wake, trace and roster.
+Each hop strips the optional caller `availability` bit before an old hop. A peer
+kit opts in with `info.sessionbus_availability:1`, and receives the optional
+`availability/1` hello capability. Current daemons hide this reserved Info key; an
+older daemon treats a future unknown Info key as ordinary public metadata. A new
+worker declares `supports_availability:true` only for the `sbt1:av1:` launch-token
+prefix; old `sbt1:` tokens keep their previous hello fields. An old worker can
+return the complete opaque new token without declaring the new capability.
+
+List aggregation preserves confirmed local and other-host rows. A silent host
+contributes no sessions. Only an opted-in request over supporting hops may get
+`hosts:[{host,products:[],availability:"not_responding"}]` for that leg. Other
+requests keep the old shape with that leg omitted. Opt-in is captured at request
+admission, including aggregates, rather than read from a later hello. If the
+whole hub cannot answer its hosts request, only confirmed local rows are
+returned; no remote host names are invented. A path through an old intermediary
+provides no new availability information. Trace-owner identity never carries a
+request's availability opt-in.
+
+Both raw TCP ends request keepalive idle 60 seconds, interval 10 seconds, count
+9, plus Linux `TCP_USER_TIMEOUT=150000` milliseconds or Darwin
+`TCP_RXT_CONNDROPTIME=150` seconds before TLS. These are nominal no-transport-
+progress budgets, not elapsed-time guarantees or proof of physical network loss.
+Each option-setting failure is logged once per connection and does not close it
+or prevent the other setter from being attempted. Other platforms keep explicit
+keepalive with an observable unsupported drop-time option. A stuck worker behind
+a responsive host, and application silence while the transport makes progress,
+remain separate from transport retirement.
+
 ### 3.1 Product contract
 
 A native product links one dependency-free reference kit and supplies six

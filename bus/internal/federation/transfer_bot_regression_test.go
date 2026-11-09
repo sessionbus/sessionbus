@@ -88,8 +88,9 @@ func TestOutgoingForwardCapacityRejectsExcessAndKeepsBothLinks(t *testing.T) {
 	case <-time.After(25 * time.Millisecond):
 	}
 	// New origin admission must not turn destination overload into a link close.
-	// An ordinary source hosts request is ordered after the excess input.
-	if hosts := callHosts(t, alpha); len(hosts) != 1 || hosts[0] != "beta" {
+	// The source's ordinary cap is full. Query from the other endpoint rather
+	// than requiring an ordinary hosts request to bypass pending accounting.
+	if hosts := callHosts(t, beta); len(hosts) != 1 || hosts[0] != "alpha" {
 		t.Fatal("excess forwarding disconnected destination", hosts)
 	}
 	select {

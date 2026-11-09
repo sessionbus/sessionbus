@@ -158,7 +158,7 @@ func TestPullRosterForwardAndCapturedCaller(t *testing.T) {
 	}
 }
 
-func TestDuplicateKeepsIncumbentAndDestinationClosesOn257th(t *testing.T) {
+func TestDuplicateKeepsIncumbentAndDestinationRefuses257th(t *testing.T) {
 	_, address, secrets := testHub(t)
 	release := make(chan struct{})
 	admitted := make(chan struct{})
@@ -189,7 +189,7 @@ func TestDuplicateKeepsIncumbentAndDestinationClosesOn257th(t *testing.T) {
 	if hosts := callHosts(t, beta); len(hosts) != 1 || hosts[0] != "alpha" {
 		t.Fatalf("incumbent roster = %#v", hosts)
 	}
-	params, _ := protocol.EncodeParams("turn.run", protocol.TurnRunRequest{SessionID: "lane@beta", Input: "go"})
+	params, _ := protocol.EncodeParams("turn.interrupt", protocol.SessionTarget{SessionID: "lane@beta"})
 	gamma := connectTestDaemon(t, address, "gamma", secrets["gamma"], func(IncomingCall) (Wait, error) { return immediate(Reply{}), nil })
 	_ = callHosts(t, gamma)
 	replies := make([]chan Reply, 257)
@@ -203,7 +203,7 @@ func TestDuplicateKeepsIncumbentAndDestinationClosesOn257th(t *testing.T) {
 			origin = gamma
 			from = Caller{SessionID: "sender@gamma", Name: "sender@gamma", Product: "peer", PrivateGroup: "session:sender@gamma", Groups: []string{"session:sender@gamma"}}
 		}
-		origin.inbox <- OutgoingCall{Value: Forward{From: from, Request: PublicRequest{Method: "turn.run", Params: params}}, Reply: replies[index]}
+		origin.inbox <- OutgoingCall{Value: Forward{From: from, Request: PublicRequest{Method: "turn.interrupt", Params: params}}, Reply: replies[index]}
 		// Fill the destination pending table, not the independent bounded
 		// origin outbox. The last request must overflow before beta dispatch.
 		if index < 256 {
@@ -214,24 +214,32 @@ func TestDuplicateKeepsIncumbentAndDestinationClosesOn257th(t *testing.T) {
 			}
 		}
 	}
-	for index, reply := range replies {
-		select {
-		case value := <-reply:
-			if value.Error == nil || value.Error.Code != protocol.ForwardLost {
-				t.Fatalf("reply %d = %#v", index, value)
-			}
-		case <-time.After(time.Second):
-			t.Fatalf("reply %d did not settle", index)
+	select {
+	case value := <-replies[256]:
+		if value.Error == nil || value.Error.Code != protocol.ForwardLost {
+			t.Fatalf("excess = %#v", value)
 		}
+	case <-time.After(time.Second):
+		t.Fatal("excess did not settle")
 	}
 	close(release)
+	for index, reply := range replies[:256] {
+		select {
+		case value := <-reply:
+			if value.Error != nil || string(value.Result) != `{}` {
+				t.Fatalf("admitted reply %d = %#v", index, value)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("admitted reply %d did not complete", index)
+		}
+	}
 	select {
 	case <-beta.closed:
-	case <-time.After(time.Second):
-		t.Fatal("overflow did not close destination")
+		t.Fatal("overflow closed destination")
+	default:
 	}
-	if hosts := callHosts(t, alpha); len(hosts) != 1 || hosts[0] != "gamma" {
-		t.Fatalf("closed destination remained in roster: %#v", hosts)
+	if hosts := callHosts(t, alpha); len(hosts) != 2 || hosts[0] != "beta" || hosts[1] != "gamma" {
+		t.Fatalf("destination lost from roster: %#v", hosts)
 	}
 }
 

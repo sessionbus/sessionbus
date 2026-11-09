@@ -830,6 +830,7 @@ func (t *Transfers) HelloObserved(ctx, generation context.Context, wire *Connect
 		}
 	}
 	hello.Info[protocol.TransferInfoKey] = 1
+	hello.Info[protocol.AvailabilityInfoKey] = 1
 	var result protocol.HelloResult
 	return wire.CallObserved(ctx, "session.hello", hello, &result, func() error {
 		if err := generation.Err(); err != nil {

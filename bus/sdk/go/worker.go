@@ -171,6 +171,7 @@ func (w *Worker) Serve(ctx context.Context) error {
 	}()
 	request := protocol.WorkerHello{Protocol: 1, LaunchToken: token, HelloDescription: hello,
 		SupportsTransfer: w.transfers != nil && strings.HasPrefix(token, protocol.TransferTokenPrefix)}
+	request.SupportsAvailability = strings.HasPrefix(token, protocol.AvailabilityTokenPrefix)
 	var helloResult protocol.HelloResult
 	if err = w.conn.CallObserved(ctx, "session.hello", request, &helloResult, func() error {
 		if w.transfers != nil {

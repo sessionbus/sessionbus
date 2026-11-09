@@ -74,33 +74,34 @@ type session struct {
 	autoClose                             <-chan time.Time
 	stopAuto                              func()
 
-	supportsTransfer   bool
-	daemon             *Daemon
-	wire               *conn.Conn
-	inbox              chan any
-	identity           *entry
-	lastIn             int64
-	pending            map[int64]routedRequest
-	deferredDeliveries []routedRequest
-	requests           map[int64]*requestState
-	owned              int
-	stopping           bool
-	closed             bool
-	child              *structuredprocess.Process
-	launch             *launch
-	committed          bool
-	openID             int64
-	closeCall          *routedRequest
-	closeAnswer        answer
-	closeTimer         *time.Timer
-	forget             bool
-	launchResult       *answer
-	processExited      bool
-	stopSignal         syscall.Signal
-	forwarded          chan federation.Reply
-	caller             *federation.Caller
-	omit               *entry
-	messageID          string
+	supportsTransfer     bool
+	supportsAvailability bool
+	daemon               *Daemon
+	wire                 *conn.Conn
+	inbox                chan any
+	identity             *entry
+	lastIn               int64
+	pending              map[int64]routedRequest
+	deferredDeliveries   []routedRequest
+	requests             map[int64]*requestState
+	owned                int
+	stopping             bool
+	closed               bool
+	child                *structuredprocess.Process
+	launch               *launch
+	committed            bool
+	openID               int64
+	closeCall            *routedRequest
+	closeAnswer          answer
+	closeTimer           *time.Timer
+	forget               bool
+	launchResult         *answer
+	processExited        bool
+	stopSignal           syscall.Signal
+	forwarded            chan federation.Reply
+	caller               *federation.Caller
+	omit                 *entry
+	messageID            string
 }
 
 func newSession(daemon *Daemon) *session {
@@ -293,6 +294,10 @@ func (s *session) firstHello(frame protocol.Frame) {
 	case *protocol.PeerHello:
 		s.peerHello(frame, hello)
 	case *protocol.WorkerHello:
+		if hello.SupportsAvailability && !strings.HasPrefix(hello.LaunchToken, protocol.AvailabilityTokenPrefix) {
+			s.reject(frame, protocol.InvalidHello)
+			return
+		}
 		start, ok := s.daemon.directory.claimWorker(s, hello.LaunchToken, hello.Product)
 		if !ok {
 			s.reject(frame, protocol.InvalidHello)
@@ -300,6 +305,7 @@ func (s *session) firstHello(frame protocol.Frame) {
 		}
 		start.claimed <- struct{}{}
 		s.supportsTransfer = hello.SupportsTransfer && strings.HasPrefix(hello.LaunchToken, protocol.TransferTokenPrefix)
+		s.supportsAvailability = hello.SupportsAvailability
 		s.startLane(start, frame, hello.HelloDescription)
 	default:
 		s.reject(frame, protocol.InvalidHello)

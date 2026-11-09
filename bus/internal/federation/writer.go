@@ -10,7 +10,15 @@ import (
 
 func queueCall(wire *conn.Conn, queued map[*pendingCall]bool, call pendingCall, bulk bool, encode func(int64) ([]byte, error), stream ...string) bool {
 	p := &call
-	if !wire.Request(bulk, p, encode, stream...) {
+	var accepted bool
+	if p.probe != nil {
+		accepted = wire.ProbeRequest(p, encode)
+	} else if p.forwarded {
+		accepted = wire.TryRequest(p, encode)
+	} else {
+		accepted = wire.Request(bulk, p, encode, stream...)
+	}
+	if !accepted {
 		return false
 	}
 	queued[p] = true
@@ -25,7 +33,7 @@ func installCall(d conn.Dispatched, queued map[*pendingCall]bool, pending map[in
 func settleQueuedCalls(queued map[*pendingCall]bool) {
 	for p := range queued {
 		delete(queued, p)
-		p.reply <- errorReply(-32015, nil)
+		notifyCall(p, errorReply(protocol.ForwardLost, nil))
 	}
 }
 
@@ -36,12 +44,12 @@ func queueTransferCall(wire *conn.Conn, queued map[*pendingCall]bool, pending ma
 	bulk := event.Method == "transfer.chunk"
 	count := 0
 	for _, call := range pending {
-		if call.bulk == bulk {
+		if call.probe == nil && call.bulk == bulk {
 			count++
 		}
 	}
 	for call := range queued {
-		if call.bulk == bulk {
+		if call.probe == nil && call.bulk == bulk {
 			count++
 		}
 	}
@@ -65,12 +73,12 @@ func queueTransferCall(wire *conn.Conn, queued map[*pendingCall]bool, pending ma
 func callCount(pending map[int64]pendingCall, queued map[*pendingCall]bool, bulk bool) int {
 	n := 0
 	for _, p := range pending {
-		if p.bulk == bulk {
+		if p.probe == nil && p.bulk == bulk {
 			n++
 		}
 	}
 	for p := range queued {
-		if p.bulk == bulk {
+		if p.probe == nil && p.bulk == bulk {
 			n++
 		}
 	}

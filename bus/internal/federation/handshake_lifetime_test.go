@@ -6,6 +6,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/antst/sessionbus/bus/internal/roster"
 )
 
 func TestHubExpiresSilentTLSClientWithoutStoppingHealthyHost(t *testing.T) {
@@ -15,7 +17,10 @@ func TestHubExpiresSilentTLSClientWithoutStoppingHealthyHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer silent.Close()
-	alpha := connectTestDaemon(t, address, "alpha", secrets["alpha"], func(IncomingCall) (Wait, error) {
+	alpha := connectTestDaemon(t, address, "alpha", secrets["alpha"], func(call IncomingCall) (Wait, error) {
+		if IsRoster(call) {
+			return immediate(RosterReply(roster.Host{Host: "alpha", Products: []string{}, Sessions: []roster.Row{}})), nil
+		}
 		return immediate(Reply{}), nil
 	})
 	if hosts := callHosts(t, alpha); len(hosts) != 0 {
