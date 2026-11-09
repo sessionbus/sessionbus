@@ -81,6 +81,10 @@ func TestAvailabilityProjectionUsesCapturedOptInAndPreservesOldBytes(t *testing.
 	if !strings.Contains(string(newReply.Result), `"availability"`) || strings.Contains(string(oldReply.Result), `"availability"`) {
 		t.Fatal("old-hop projection failed", newReply, oldReply)
 	}
+	decoded, err := protocol.DecodeResult("session.list", oldReply.Result)
+	if err != nil || len(decoded.(*protocol.SessionListResult).Hosts) != 0 {
+		t.Fatal("legacy projection retained the silent host leg", string(oldReply.Result), err)
+	}
 	for _, capable := range []bool{false, true} {
 		plain := Reply{Result: []byte(`{"hosts":[], "sessions":[]}`)}
 		if got := ProjectAvailability("session.list", plain, capable); string(got.Result) != string(plain.Result) {

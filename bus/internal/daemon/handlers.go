@@ -431,9 +431,9 @@ func (s *session) finishRequest(id int64, state *requestState, result answer) {
 		}
 		if !state.availability {
 			if listed, ok := result.value.(*protocol.SessionListResult); ok {
-				for i := range listed.Hosts {
-					listed.Hosts[i].Availability = ""
-				}
+				projected := *listed
+				projected.Hosts = federation.LegacyHostProducts(listed.Hosts)
+				result.value = &projected
 			}
 		}
 	}

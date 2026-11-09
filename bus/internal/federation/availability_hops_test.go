@@ -59,6 +59,14 @@ func TestAvailabilityIsProjectedOnEveryNegotiatedHop(t *testing.T) {
 						if value.Error != nil || strings.Contains(string(value.Result), `"availability"`) != want {
 							t.Fatal("old-hop reply projection failed", string(value.Result), value.Error)
 						}
+						decoded, err := protocol.DecodeResult("session.list", value.Result)
+						if err != nil {
+							t.Fatal(err)
+						}
+						hosts := decoded.(*protocol.SessionListResult).Hosts
+						if want && (len(hosts) != 1 || hosts[0].Host != "beta") || !want && len(hosts) != 0 {
+							t.Fatal("legacy hop retained a synthetic silent-host row", hosts)
+						}
 					case <-time.After(time.Second):
 						t.Fatal("mixed-version reply did not return")
 					}

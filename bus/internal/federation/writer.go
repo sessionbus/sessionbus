@@ -64,8 +64,35 @@ func queueTransferCall(wire *conn.Conn, queued map[*pendingCall]bool, pending ma
 	if err != nil {
 		return false
 	}
-	if _, err = decodeTransferParams(event.Method, raw); err != nil {
+	params, err := decodeTransferParams(event.Method, raw)
+	if err != nil {
 		return false
+	}
+	// The public-list opt-in has no transfer meaning. Project the freshly
+	// decoded copy on both create and bind hops, leaving the original intact.
+	var from *Caller
+	switch p := params.(type) {
+	case *TransferCreate:
+		from = &p.From
+	case *TransferBind:
+		from = &p.From
+	}
+	if from != nil {
+		var fields struct {
+			From struct {
+				Availability json.RawMessage `json:"availability"`
+			} `json:"from"`
+		}
+		if json.Unmarshal(raw, &fields) != nil {
+			return false
+		}
+		if fields.From.Availability != nil {
+			from.Availability = false
+			raw, err = json.Marshal(params)
+			if err != nil {
+				return false
+			}
+		}
 	}
 	return queueCall(wire, queued, pendingCall{method: event.Method, reply: event.Reply, transfer: true, bulk: bulk}, bulk, func(id int64) ([]byte, error) { return protocol.EncodeRequest(id, event.Method, raw) }, protocol.TransferStreamID(event.Params))
 }

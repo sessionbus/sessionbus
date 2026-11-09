@@ -27,15 +27,30 @@ func ProjectAvailability(method string, reply Reply, enabled bool) Reply {
 		return reply // Ordinary frame validation remains authoritative.
 	}
 	listed := decoded.(*protocol.SessionListResult)
-	changed := false
-	for i := range listed.Hosts {
-		changed = changed || listed.Hosts[i].Availability != ""
-		listed.Hosts[i].Availability = ""
-	}
-	if changed {
+	hosts := LegacyHostProducts(listed.Hosts)
+	if len(hosts) != len(listed.Hosts) {
+		listed.Hosts = hosts
 		reply.Result, _ = protocol.EncodeResult(method, listed)
 	}
 	return reply
+}
+
+// LegacyHostProducts omits silent-leg stubs without changing confirmed hosts
+// or the input slice shared with another recipient.
+func LegacyHostProducts(hosts []protocol.HostProducts) []protocol.HostProducts {
+	for i, host := range hosts {
+		if host.Availability == "not_responding" {
+			projected := make([]protocol.HostProducts, 0, len(hosts)-1)
+			projected = append(projected, hosts[:i]...)
+			for _, remaining := range hosts[i+1:] {
+				if remaining.Availability != "not_responding" {
+					projected = append(projected, remaining)
+				}
+			}
+			return projected
+		}
+	}
+	return hosts
 }
 
 func unavailableList(host string, enabled bool) Reply {

@@ -75,6 +75,14 @@ func TestAvailabilityListRequestSnapshotSurvivesRehello(t *testing.T) {
 			if value.Error != nil || strings.Contains(string(value.Result), `"availability"`) != initial {
 				t.Fatal("reply used current hello instead of admission snapshot", value)
 			}
+			decoded, err := protocol.DecodeResult("session.list", value.Result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hosts := decoded.(*protocol.SessionListResult).Hosts
+			if initial && (len(hosts) != 1 || hosts[0].Host != "beta") || !initial && len(hosts) != 0 {
+				t.Fatal("legacy final response retained the silent host leg", hosts)
+			}
 		})
 	}
 }

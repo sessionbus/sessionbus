@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"net"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -30,7 +31,13 @@ func TestTCPOptionFailuresDoNotSkipTheOtherSetter(t *testing.T) {
 		}
 		return errors.New("injected keepalive failure")
 	}, func() (syscall.RawConn, error) { return failedRawControl{&calls}, nil }, &log)
-	if calls != 1 || strings.Count(log.String(), "federation TCP ") != 2 {
+	wantCalls := 0
+	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+		wantCalls = 1
+	} else if !strings.Contains(log.String(), "unsupported on this platform") {
+		t.Fatalf("fallback did not report unsupported drop-time option: %q", log.String())
+	}
+	if calls != wantCalls || strings.Count(log.String(), "federation TCP ") != 2 {
 		t.Fatalf("option attempts/logs: %d %q", calls, log.String())
 	}
 }
