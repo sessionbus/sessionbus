@@ -968,8 +968,6 @@ exact generation's transfers with the same publication/UNKNOWN rules. Ordinary
 peer reconnect proceeds while old cleanup remains charged; executor disposal
 joins owned cleanup. No transfer invents a Run or forces a native wake.
 
-## 2. Daemon
-
 ### 1.7 Federation responsiveness
 
 Each supported federation attachment probes independently: hub to host uses the
@@ -1024,6 +1022,8 @@ or prevent the other setter from being attempted. Other platforms keep explicit
 keepalive with an observable unsupported drop-time option. A stuck worker behind
 a responsive host, and application silence while the transport makes progress,
 remain separate from transport retirement.
+
+## 2. Daemon
 
 ### 2.1 Stored and live data
 
