@@ -12,6 +12,7 @@ import (
 )
 
 type requestState struct {
+	policy       bool
 	availability bool
 	frame        protocol.Frame
 	target       *entry
@@ -113,12 +114,16 @@ func (s *session) peerHello(frame protocol.Frame, hello *protocol.PeerHello) {
 	}
 	s.supportsTransfer = transferOptIn(hello.Info)
 	s.supportsAvailability = capabilityOptIn(hello.Info, protocol.AvailabilityInfoKey)
+	s.supportsPolicy = capabilityOptIn(hello.Info, protocol.PolicyInfoKey)
 	result := protocol.HelloResult{}
 	if s.supportsTransfer {
 		result.Capabilities = []string{protocol.TransferCapability}
 	}
 	if s.supportsAvailability {
 		result.Capabilities = append(result.Capabilities, protocol.AvailabilityCapability)
+	}
+	if s.supportsPolicy {
+		result.Capabilities = append(result.Capabilities, protocol.PolicyCapability)
 	}
 	s.result(frame, result)
 }
@@ -424,6 +429,22 @@ func (s *session) consumeReply(event replyEvent) {
 
 func (s *session) finishRequest(id int64, state *requestState, result answer) {
 	delete(s.requests, id)
+	if !state.policy {
+		if result.remote != nil {
+			projected := federation.ProjectPolicy(state.frame.Method, *result.remote, false)
+			result.remote = &projected
+		}
+		if result.code == protocol.PolicyDenied {
+			result.code, result.data = protocol.UnknownSession, nil
+		}
+		if sent, ok := result.value.(*protocol.MessageSendResult); ok {
+			if deliveries := federation.LegacyPolicyDeliveries(sent.Deliveries); deliveries != nil {
+				projected := *sent
+				projected.Deliveries = deliveries
+				result.value = &projected
+			}
+		}
+	}
 	if state.frame.Method == "session.list" && result.code == 0 {
 		if result.remote != nil {
 			projected := federation.ProjectAvailability(state.frame.Method, *result.remote, state.availability)
@@ -497,6 +518,8 @@ func reason(code int, fallback string) string {
 		return "no_receipt"
 	case protocol.UnknownSession:
 		return "unknown_session"
+	case protocol.PolicyDenied:
+		return protocol.PolicyReason
 	default:
 		return fallback
 	}

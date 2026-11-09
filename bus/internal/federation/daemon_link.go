@@ -36,8 +36,11 @@ type daemonReply struct {
 }
 
 type pendingCall struct {
+	policy         *policyAdmission
+	selectedAt     time.Time
 	forwarded      bool
 	availability   bool
+	policyEnabled  bool
 	probe          *linkLiveness
 	transfer, bulk bool
 	method         string
@@ -129,6 +132,8 @@ func ServeDaemonWithTransfers(ctx context.Context, host string, fd net.Conn, inb
 		case OutgoingCall:
 			capable := event.Value.From.Availability && SupportsAvailability(fd)
 			event.Value.From.Availability = capable
+			policyEnabled := event.Value.From.Policy && SupportsPolicy(fd)
+			event.Value.From.Policy = policyEnabled
 			if liveness.silent.Load() {
 				target, _ := targetHost(event.Value.Request)
 				event.Reply <- silenceReply(&pendingCall{method: event.Value.Request.Method, target: target, availability: capable})
@@ -154,7 +159,7 @@ func ServeDaemonWithTransfers(ctx context.Context, host string, fd net.Conn, inb
 			_, forwarded, err := forwardRequestBytes(1, event.Value)
 			event.Value, request = forwarded, forwarded.Request
 			target, targetErr := targetHost(request)
-			if cause != nil || targetErr != nil || err != nil || !queueCall(wire, queued, pendingCall{forwarded: true, availability: capable, method: request.Method, reply: event.Reply, trace: request.Trace, target: target}, false, func(id int64) ([]byte, error) { body, _, err := forwardRequestBytes(id, forwarded); return body, err }) {
+			if cause != nil || targetErr != nil || err != nil || !queueCall(wire, queued, pendingCall{forwarded: true, policyEnabled: policyEnabled, availability: capable, method: request.Method, reply: event.Reply, trace: request.Trace, target: target}, false, func(id int64) ([]byte, error) { body, _, err := forwardRequestBytes(id, forwarded); return body, err }) {
 				code, data := protocol.ForwardLost, any(nil)
 				if targetErr != nil || err != nil {
 					code, data = protocol.InvalidFrame, "forwarded request exceeds the frame limit"
@@ -235,7 +240,7 @@ func ServeDaemonWithTransfers(ctx context.Context, host string, fd net.Conn, inb
 				continue
 			}
 			if cause == nil {
-				cause = daemonFrame(host, traceCapable, wakeCapable, SupportsAvailability(fd), event, pending, wire, inbox, admit, &helpers, &lastIn, lifetime)
+				cause = daemonFrame(host, traceCapable, wakeCapable, SupportsAvailability(fd), SupportsPolicy(fd), event, pending, wire, inbox, admit, &helpers, &lastIn, lifetime)
 				if cause != nil {
 					fmt.Fprintln(stderr, cause)
 					wire.Close()
@@ -253,7 +258,7 @@ func ServeDaemonWithTransfers(ctx context.Context, host string, fd net.Conn, inb
 	}
 }
 
-func daemonFrame(host string, traceCapable, wakeCapable, availabilityCapable bool, event conn.Frame, pending map[int64]pendingCall, wire *conn.Conn, inbox chan any, admit func(IncomingCall) (Wait, error), helpers *sync.WaitGroup, lastIn *int64, lifetime []func(LifetimeEvent)) error {
+func daemonFrame(host string, traceCapable, wakeCapable, availabilityCapable, policyCapable bool, event conn.Frame, pending map[int64]pendingCall, wire *conn.Conn, inbox chan any, admit func(IncomingCall) (Wait, error), helpers *sync.WaitGroup, lastIn *int64, lifetime []func(LifetimeEvent)) error {
 	frame := event.Value
 	if event.Err != nil {
 		return event.Err
@@ -271,7 +276,7 @@ func daemonFrame(host string, traceCapable, wakeCapable, availabilityCapable boo
 		if call.probe != nil {
 			call.probe.replied()
 		}
-		notifyCall(&call, ProjectAvailability(call.method, reply, call.availability))
+		notifyCall(&call, ProjectPolicy(call.method, ProjectAvailability(call.method, reply, call.availability), call.policyEnabled))
 		return nil
 	}
 	if !event.Ordered && frame.ID <= *lastIn {
@@ -331,7 +336,7 @@ func daemonFrame(host string, traceCapable, wakeCapable, availabilityCapable boo
 		return err
 	}
 	value, target, err := decodeForward(frame.Params, source)
-	if err == nil && value.From.Availability && !availabilityCapable {
+	if err == nil && (value.From.Availability && !availabilityCapable || value.From.Policy && !policyCapable) {
 		return errFrame
 	}
 	if err != nil || target != host {
@@ -363,6 +368,7 @@ func daemonFrame(host string, traceCapable, wakeCapable, availabilityCapable boo
 		defer helpers.Done()
 		if reply, ok := wait(wire.Done()); ok {
 			reply = ProjectAvailability(value.Request.Method, reply, availabilityCapable && value.From.Availability)
+			reply = ProjectPolicy(value.Request.Method, reply, policyCapable && value.From.Policy)
 			if !wire.Post(daemonReply{id: id, value: reply}) {
 				wire.Close()
 			}

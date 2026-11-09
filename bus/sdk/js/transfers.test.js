@@ -265,3 +265,18 @@ test("late accepted snapshot cannot recreate a terminally retired local binding"
   await assert.rejects(f.transfers.accept({id:"one",path:"/local/destination"}),/transfer_binding_conflict/);
   assert.equal(f.incoming.length,1);
 });
+
+
+test("policy worker bootstrap declares only on the versioned policy token", { timeout: 2000 }, async t => {
+  for (const token of ["legacy-random", "sbt1:random", "sbt1:av1:token-old", "sbt1:av1:fp1:token-new"]) {
+    const [client, server] = pair(), got = deferred(); let bus;
+    bus = new Connection(server,false,r => { got.resolve(r.params); void bus.result(r,{}); });
+    const worker = new Worker({hello:() => ({product:"fixture",supported_open_fields:[],extra_arguments:[]})},{SESSIONBUS_SOCKET:"fixture",SESSIONBUS_LAUNCH_TOKEN:token},{connect:() => client});
+    const serving = worker.serve().catch(error=>error), hello = await got.promise;
+    t.after(async () => { worker.shutdown(); bus.close(); await serving; });
+    assert.equal(hello.supports_transfer,token.startsWith("sbt1:")?true:undefined);
+    assert.equal(hello.supports_policy,token.startsWith("sbt1:av1:fp1:")?true:undefined);
+    assert.equal(hello.launch_token,token);
+    worker.shutdown(); bus.close(); await serving;
+  }
+});

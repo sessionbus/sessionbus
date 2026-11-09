@@ -23,11 +23,12 @@
         "version": {"type": "string", "minLength": 1},
         "supports_message_run": {"type":"boolean"},
         "supports_transfer": {"type":"boolean","const":true},
-        "supports_availability": {"type":"boolean","const":true}
+        "supports_availability": {"type":"boolean","const":true},
+        "supports_policy": {"type":"boolean","const":true}
       },
-      "allOf": [{"if":{"required":["launch_token"]},"then":{"allOf":[{"required":["launch_token","supported_open_fields","extra_arguments"]},{"not":{"required":["session_id"]}},{"not":{"required":["name"]}},{"not":{"required":["groups"]}},{"not":{"required":["info"]}}]},"else":{"allOf":[{"required":["session_id","groups","info"]},{"not":{"required":["supported_open_fields"]}},{"not":{"required":["supports_message_run"]}},{"not":{"required":["supports_transfer"]}},{"not":{"required":["supports_availability"]}},{"not":{"required":["extra_arguments"]}},{"not":{"required":["version"]}}]}}]
+      "allOf": [{"if":{"required":["launch_token"]},"then":{"allOf":[{"required":["launch_token","supported_open_fields","extra_arguments"]},{"not":{"required":["session_id"]}},{"not":{"required":["name"]}},{"not":{"required":["groups"]}},{"not":{"required":["info"]}}]},"else":{"allOf":[{"required":["session_id","groups","info"]},{"not":{"required":["supported_open_fields"]}},{"not":{"required":["supports_message_run"]}},{"not":{"required":["supports_transfer"]}},{"not":{"required":["supports_availability"]}},{"not":{"required":["supports_policy"]}},{"not":{"required":["extra_arguments"]}},{"not":{"required":["version"]}}]}}]
     },
-    "SessionHelloResult": {"type":"object","additionalProperties":false,"properties":{"capabilities":{"type":"array","uniqueItems":true,"items":{"enum":["transfer/1","availability/1"]}}}},
+    "SessionHelloResult": {"type":"object","additionalProperties":false,"properties":{"capabilities":{"type":"array","uniqueItems":true,"items":{"enum":["transfer/1","availability/1","policy/1"]}}}},
     "SessionSupersededRequest": {"type": "object", "additionalProperties": false},
     "SessionSupersededResult": {"type": "object", "additionalProperties": false},
     "SessionListRequest": {
@@ -366,8 +367,8 @@
       "additionalProperties": false,
       "required": ["code", "message"],
       "properties": {
-        "code": {"enum": [-32600, -32602, -32603, -32001, -32002, -32003, -32004, -32005, -32007, -32008, -32009, -32010, -32011, -32012, -32013, -32014, -32015, -32016]},
-        "message": {"enum": ["invalid_frame", "invalid_hello", "internal", "unknown_session", "not_connected", "busy", "not_running", "already_connected", "unknown_product", "unsupported_open_field", "spawn_failed", "timeout", "not_committed", "superseded", "name_taken", "unknown_host", "forward_lost", "unsupported_trace"]},
+        "code": {"enum": [-32600, -32602, -32603, -32001, -32002, -32003, -32004, -32005, -32007, -32008, -32009, -32010, -32011, -32012, -32013, -32014, -32015, -32016, -32017]},
+        "message": {"enum": ["invalid_frame", "invalid_hello", "internal", "unknown_session", "not_connected", "busy", "not_running", "already_connected", "unknown_product", "unsupported_open_field", "spawn_failed", "timeout", "not_committed", "superseded", "name_taken", "unknown_host", "forward_lost", "unsupported_trace", "federation_policy_denied"]},
         "data": {}
       },
       "allOf": [
@@ -383,7 +384,7 @@
         {"if": {"properties": {"code": {"const": -32009}}}, "then": {"properties": {"message": {"const": "spawn_failed"}}}},
         {"if": {"properties": {"code": {"const": -32010}}}, "then": {"properties": {"message": {"const": "timeout"}}}},
         {"if": {"properties": {"code": {"const": -32011}}}, "then": {"properties": {"message": {"const": "not_committed"}}}},
-        {"if": {"properties": {"code": {"const": -32012}}}, "then": {"properties": {"message": {"const": "superseded"}}}}, {"if": {"properties": {"code": {"const": -32013}}}, "then": {"properties": {"message": {"const": "name_taken"}}}}, {"if": {"properties": {"code": {"const": -32014}}}, "then": {"properties": {"message": {"const": "unknown_host"}}}}, {"if": {"properties": {"code": {"const": -32015}}}, "then": {"properties": {"message": {"const": "forward_lost"}}}}, {"if": {"properties": {"code": {"const": -32016}}}, "then": {"properties": {"message": {"const": "unsupported_trace"}}}}, {"if": {"properties": {"code": {"const": -32603}}}, "then": {"properties": {"message": {"const": "internal"}}}},
+        {"if": {"properties": {"code": {"const": -32012}}}, "then": {"properties": {"message": {"const": "superseded"}}}}, {"if": {"properties": {"code": {"const": -32013}}}, "then": {"properties": {"message": {"const": "name_taken"}}}}, {"if": {"properties": {"code": {"const": -32014}}}, "then": {"properties": {"message": {"const": "unknown_host"}}}}, {"if": {"properties": {"code": {"const": -32015}}}, "then": {"properties": {"message": {"const": "forward_lost"}}}}, {"if": {"properties": {"code": {"const": -32016}}}, "then": {"properties": {"message": {"const": "unsupported_trace"}}}}, {"if": {"properties": {"code": {"const": -32017}}}, "then": {"properties": {"message": {"const": "federation_policy_denied"}}}}, {"if": {"properties": {"code": {"const": -32603}}}, "then": {"properties": {"message": {"const": "internal"}}}},
         {
           "if": {"properties": {"code": {"const": -32009}}, "required": ["code"]},
           "then": {"required": ["data"], "properties": {"data": {"$ref": "#/$defs/SpawnFailedData"}}},

@@ -13,7 +13,7 @@ const AvailabilityALPN = "sessionbus-availability/1"
 
 func SupportsAvailability(fd net.Conn) bool {
 	connection, ok := fd.(*tls.Conn)
-	return ok && connection.ConnectionState().NegotiatedProtocol == AvailabilityALPN
+	return ok && (connection.ConnectionState().NegotiatedProtocol == AvailabilityALPN || connection.ConnectionState().NegotiatedProtocol == PolicyALPN)
 }
 
 // ProjectAvailability is a per-hop projection, using the captured request's

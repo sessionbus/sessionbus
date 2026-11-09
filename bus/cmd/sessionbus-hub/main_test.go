@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,6 +53,36 @@ func TestHubUsesEnvironmentWhenFlagsAreAbsent(t *testing.T) {
 	t.Setenv("SESSIONBUS_HUB_CONFIG", missing)
 	if err := run(nil); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("environment defaults error = %v", err)
+	}
+}
+
+func TestHubExplicitPolicyRefusesBeforeListenerAndPreservesSecrets(t *testing.T) {
+	dir := t.TempDir()
+	config := filepath.Join(dir, "hub.json")
+	secret := base64.StdEncoding.EncodeToString(make([]byte, federation.SecretBytes))
+	before := []byte(`{"alpha":"` + secret + `"}`)
+	if err := os.WriteFile(config, before, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(dir, "missing-policy.json")
+	// A deliberately invalid listen address must never win over the policy
+	// load error: an explicit bad path cannot start an unrestricted listener.
+	if err := runWithIO([]string{"--listen", "invalid-address", "--config", config, "--policy", missing}, io.Discard, io.Discard); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("listener preceded explicit policy validation", err)
+	}
+	if err := runWithIO([]string{"--listen", "invalid-address", "--config", config, "--policy", ""}, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "nonempty path") {
+		t.Fatal("explicit empty policy became unrestricted", err)
+	}
+	policy := filepath.Join(dir, "policy.json")
+	if err := os.WriteFile(policy, []byte(`{"hosts":{"alpha":{"groups":null}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runWithIO([]string{"--listen", "invalid-address", "--config", config, "--policy", policy}, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "must be an array") {
+		t.Fatal("malformed policy fell through to listener", err)
+	}
+	after, err := os.ReadFile(config)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("policy startup edited the existing secrets map", err)
 	}
 }
 

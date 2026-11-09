@@ -198,13 +198,23 @@ func (h *hubTransfers) chunkAdmitted(link *hostLink, frame protocol.Frame) bool 
 	return h.engine.CanChunk(b.key, p.ID)
 }
 func (h *hubTransfers) create(origin, destination *hostLink, p TransferCreate) (TransferCreated, error) {
-	if destination == nil || destination == origin || !SupportsTransfer(origin.fd) || !SupportsTransfer(destination.fd) {
-		return TransferCreated{}, transfer.ErrUnsupported
-	}
-	reservation, err := h.budget.PendingFor(origin.attachment + ":" + p.Generation)
+	reservation, err := h.reserveCreate(origin, destination, p)
 	if err != nil {
 		return TransferCreated{}, err
 	}
+	return h.createReserved(origin, destination, p, reservation, nil)
+}
+
+func (h *hubTransfers) reserveCreate(origin, destination *hostLink, p TransferCreate) (*transfer.Reservation, error) {
+	if destination == nil || destination == origin || !SupportsTransfer(origin.fd) || !SupportsTransfer(destination.fd) {
+		return nil, transfer.ErrUnsupported
+	}
+	return h.budget.PendingFor(origin.attachment + ":" + p.Generation)
+}
+
+// The caller has charged the existing reservation before policy snapshot
+// allocation/fanout. This owner releases it on every unadopted path.
+func (h *hubTransfers) createReserved(origin, destination *hostLink, p TransferCreate, reservation *transfer.Reservation, policy *policyTransfer) (TransferCreated, error) {
 	adopted := false
 	defer func() {
 		if !adopted {
@@ -230,6 +240,9 @@ func (h *hubTransfers) create(origin, destination *hostLink, p TransferCreate) (
 	target, err = h.bind(h.ctx, destination, TransferBind{From: p.From, Target: p.Target})
 	if err != nil {
 		return TransferCreated{}, err
+	}
+	if !policy.allows(source.bound, target.bound) {
+		return TransferCreated{}, transfer.ErrRole
 	}
 	// One bounded metadata copy per hub engine: refuse an unrepresentable scope
 	// before any file handle opens. Ordinary messaging remains available.

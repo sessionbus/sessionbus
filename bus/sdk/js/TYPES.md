@@ -49,6 +49,14 @@ daemons hide it as transport metadata; an old daemon may expose this unknown Inf
 key. Raw Connection owners must explicitly opt in. Worker hello opt-in uses only
 the daemon-issued `sbt1:av1:` token; callers do not choose a different token.
 
+The kit also declares `sessionbus_policy:1`; the distinct `policy/1` capability
+permits error `-32017` / reason `federation_policy_denied`. Availability alone does
+not declare it. Worker `supports_policy:true` is emitted only for daemon-issued
+`sbt1:av1:fp1:` tokens; old token hellos retain their prior shape. Every supporting
+hop projects this code/reason to `unknown_session` for old hops or non-opting
+callers, using the request's admission snapshot. Other delivery reasons remain
+arbitrary strings. Old daemons can expose unknown future Info keys as metadata.
+
 To regenerate and check from a source checkout:
 
 ```sh

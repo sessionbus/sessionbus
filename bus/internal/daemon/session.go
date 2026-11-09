@@ -76,6 +76,7 @@ type session struct {
 
 	supportsTransfer     bool
 	supportsAvailability bool
+	supportsPolicy       bool
 	daemon               *Daemon
 	wire                 *conn.Conn
 	inbox                chan any
@@ -294,6 +295,10 @@ func (s *session) firstHello(frame protocol.Frame) {
 	case *protocol.PeerHello:
 		s.peerHello(frame, hello)
 	case *protocol.WorkerHello:
+		if hello.SupportsPolicy && !strings.HasPrefix(hello.LaunchToken, protocol.PolicyTokenPrefix) {
+			s.reject(frame, protocol.InvalidHello)
+			return
+		}
 		if hello.SupportsAvailability && !strings.HasPrefix(hello.LaunchToken, protocol.AvailabilityTokenPrefix) {
 			s.reject(frame, protocol.InvalidHello)
 			return
@@ -306,6 +311,7 @@ func (s *session) firstHello(frame protocol.Frame) {
 		start.claimed <- struct{}{}
 		s.supportsTransfer = hello.SupportsTransfer && strings.HasPrefix(hello.LaunchToken, protocol.TransferTokenPrefix)
 		s.supportsAvailability = hello.SupportsAvailability
+		s.supportsPolicy = hello.SupportsPolicy
 		s.startLane(start, frame, hello.HelloDescription)
 	default:
 		s.reject(frame, protocol.InvalidHello)

@@ -279,6 +279,7 @@ func (p *Peer) helloObserved(ctx context.Context, wire *rpc.Conn, identity PeerI
 			hello.Info[protocol.TransferInfoKey] = 1
 		}
 		hello.Info[protocol.AvailabilityInfoKey] = 1
+		hello.Info[protocol.PolicyInfoKey] = 1
 		var helloResult protocol.HelloResult
 		err := wire.CallObserved(ctx, "session.hello", hello, &helloResult, func() error {
 			p.mu.Lock()

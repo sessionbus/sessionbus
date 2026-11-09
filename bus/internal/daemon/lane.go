@@ -41,6 +41,9 @@ func (s *session) startLane(start *launch, helloFrame protocol.Frame, hello prot
 	if s.supportsAvailability {
 		result.Capabilities = append(result.Capabilities, protocol.AvailabilityCapability)
 	}
+	if s.supportsPolicy {
+		result.Capabilities = append(result.Capabilities, protocol.PolicyCapability)
+	}
 	s.result(helloFrame, result)
 	s.beginOpen()
 }

@@ -179,7 +179,7 @@ func DecodeError(raw []byte) (*RPCError, error) {
 	return &value, nil
 }
 
-var errorMessages = map[int]string{InvalidFrame: "invalid_frame", InvalidHello: "invalid_hello", Internal: "internal", UnknownSession: "unknown_session", NotConnected: "not_connected", Busy: "busy", NotRunning: "not_running", AlreadyConnected: "already_connected", UnknownProduct: "unknown_product", UnsupportedOpen: "unsupported_open_field", SpawnFailed: "spawn_failed", Timeout: "timeout", NotCommitted: "not_committed", Superseded: "superseded", NameTaken: "name_taken", UnknownHost: "unknown_host", ForwardLost: "forward_lost", UnsupportedTrace: "unsupported_trace"}
+var errorMessages = map[int]string{InvalidFrame: "invalid_frame", InvalidHello: "invalid_hello", Internal: "internal", UnknownSession: "unknown_session", NotConnected: "not_connected", Busy: "busy", NotRunning: "not_running", AlreadyConnected: "already_connected", UnknownProduct: "unknown_product", UnsupportedOpen: "unsupported_open_field", SpawnFailed: "spawn_failed", Timeout: "timeout", NotCommitted: "not_committed", Superseded: "superseded", NameTaken: "name_taken", UnknownHost: "unknown_host", ForwardLost: "forward_lost", UnsupportedTrace: "unsupported_trace", PolicyDenied: PolicyReason}
 
 type schemaNode map[string]any
 

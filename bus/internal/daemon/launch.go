@@ -38,7 +38,7 @@ type processEvent struct {
 type spawnTimeout struct{ launch *launch }
 
 func newLaunch(product string, describe, fresh bool) *launch {
-	return &launch{token: protocol.AvailabilityTokenPrefix + randomID("token"), product: product, claimed: make(chan struct{}, 1), timer: time.NewTimer(spawnTransactionTimeout),
+	return &launch{token: protocol.PolicyTokenPrefix + randomID("token"), product: product, claimed: make(chan struct{}, 1), timer: time.NewTimer(spawnTransactionTimeout),
 		reply: make(chan answer, 1), describe: describe, fresh: fresh}
 }
 
