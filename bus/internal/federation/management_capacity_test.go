@@ -13,7 +13,7 @@ import (
 	"github.com/antst/sessionbus/bus/sdk/go/protocol"
 )
 
-func heldManagementLink(t *testing.T) (chan any, <-chan protocol.Frame, net.Conn) {
+func heldManagementLink(t *testing.T) (chan any, <-chan protocol.Frame, net.Conn, <-chan struct{}) {
 	t.Helper()
 	left, right := net.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -35,7 +35,7 @@ func heldManagementLink(t *testing.T) (chan any, <-chan protocol.Frame, net.Conn
 		_ = ServeDaemon(ctx, "alpha", left, inbox, nil, io.Discard)
 	}()
 	t.Cleanup(func() { cancel(); _ = right.Close(); <-ownerDone; <-readerDone })
-	return inbox, frames, right
+	return inbox, frames, right, ownerDone
 }
 
 func managementFrame(t *testing.T, frames <-chan protocol.Frame) protocol.Frame {
@@ -52,7 +52,7 @@ func managementFrame(t *testing.T, frames <-chan protocol.Frame) protocol.Frame 
 // The identical fixture runs on old main. All writer jobs have actually been
 // read at the far end before testing the owner pending cap.
 func TestManagementPendingCapRefusesWithoutClosingAndLateReplyFreesSlot(t *testing.T) {
-	inbox, frames, remote := heldManagementLink(t)
+	inbox, frames, remote, _ := heldManagementLink(t)
 	var first chan Reply
 	for i := 0; i < protocol.MaxOperations; i++ {
 		reply := make(chan Reply, 1)
@@ -103,7 +103,7 @@ func TestManagementPendingCapRefusesWithoutClosingAndLateReplyFreesSlot(t *testi
 }
 
 func TestCleanupAtFullManagementCapKeepsExistingLinkLossBoundary(t *testing.T) {
-	inbox, frames, remote := heldManagementLink(t)
+	inbox, frames, _, joined := heldManagementLink(t)
 	for range protocol.MaxOperations {
 		inbox <- HostsCall{Reply: make(chan Reply, 1)}
 		_ = managementFrame(t, frames)
@@ -118,11 +118,9 @@ func TestCleanupAtFullManagementCapKeepsExistingLinkLossBoundary(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("cleanup overflow did not settle")
 	}
-	if err := remote.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	var body [1]byte
-	if _, err := remote.Read(body[:]); err != io.EOF {
-		t.Fatal("cleanup overflow lost existing close-through-link-loss semantics", err)
+	select {
+	case <-joined:
+	case <-time.After(time.Second):
+		t.Fatal("cleanup overflow lost existing close-through-link-loss semantics")
 	}
 }

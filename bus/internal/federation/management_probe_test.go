@@ -10,7 +10,7 @@ import (
 )
 
 func TestReservedProbeAtFullDispatchedManagementCap(t *testing.T) {
-	inbox, frames, remote := heldManagementLink(t)
+	inbox, frames, remote, _ := heldManagementLink(t)
 	for range protocol.MaxOperations {
 		inbox <- HostsCall{Reply: make(chan Reply, 1)}
 		_ = managementFrame(t, frames)
