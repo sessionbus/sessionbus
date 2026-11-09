@@ -289,8 +289,10 @@ func (s *session) remoteResponse(frame protocol.Frame, reply federation.Reply) {
 
 func (s *session) listFederated(frame protocol.Frame) bool {
 	hosts := make(chan federation.Reply, 1)
-	if code := s.postAggregate(frame, federation.HostsCall{Reply: hosts}); code != 0 {
-		return code != protocol.UnknownHost
+	if code := s.daemon.directory.postFederation(federation.HostsCall{Reply: hosts}); code != 0 {
+		// No remote work or request state was admitted. Keep the ordinary
+		// confirmed local list without first emitting a conflicting error.
+		return false
 	}
 	caller, lifetime := s.federationCaller(), s.identity.done
 	local := s.daemon.directory.forwardLocal(caller, s.identity, "session.list", &protocol.SessionListRequest{Host: s.daemon.host}, "")
@@ -336,7 +338,7 @@ func (s *session) collectFederatedList(caller federation.Caller, local federatio
 		call := federation.OutgoingCall{Value: federation.Forward{From: caller,
 			Request: federation.PublicRequest{Method: "session.list", Params: params}}, Reply: replies[index]}
 		if code := s.daemon.directory.postFederation(call); code != 0 {
-			return answer{code: protocol.ForwardLost}
+			replies[index] <- federation.Reply{Error: &protocol.RPCError{Code: protocol.ForwardLost, Message: "forward_lost"}}
 		}
 	}
 	localReply, ok := local(lifetime)
@@ -349,7 +351,7 @@ func (s *session) collectFederatedList(caller federation.Caller, local federatio
 	}
 	result := value.value.(*protocol.SessionListResult)
 	result.SelfInfo = listSelfInfo(caller)
-	for index, reply := range replies {
+	for _, reply := range replies {
 		var remote federation.Reply
 		select {
 		case remote = <-reply:
@@ -359,9 +361,8 @@ func (s *session) collectFederatedList(caller federation.Caller, local federatio
 		value := remoteAnswer("session.list", remote)
 		if value.code != 0 {
 			if value.code == protocol.ForwardLost {
-				if caller.Availability {
-					result.Hosts = append(result.Hosts, protocol.HostProducts{Host: names[index], Products: []string{}, Availability: "not_responding"})
-				}
+				// Capacity and admission failures share this uncertainty code.
+				// Only a successful marked-silent result can supply availability.
 				continue
 			}
 			return answer{code: protocol.ForwardLost}

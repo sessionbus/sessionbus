@@ -3,6 +3,8 @@
 package federation
 
 import (
+	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -47,6 +49,11 @@ func TestPublicSilenceWaitIsUnknownWhileOwnershipLinkStaysConnected(t *testing.T
 	})
 	_ = callHosts(t, alpha)
 	caller := Caller{SessionID: "sender@alpha", Product: "peer", PrivateGroup: "session:sender@alpha", Groups: []string{"session:sender@alpha"}}
+	// The raw caller explicitly opts in. Unmarshal keeps this fixture runnable
+	// on old main, whose Caller has no availability member.
+	if err := json.Unmarshal([]byte(`{"availability":true}`), &caller); err != nil {
+		t.Fatal(err)
+	}
 	params, _ := protocol.EncodeParams("turn.interrupt", protocol.SessionTarget{SessionID: "lane@beta"})
 	reply := make(chan Reply, 1)
 	alpha.inbox <- OutgoingCall{Value: Forward{From: caller, Request: PublicRequest{Method: "turn.interrupt", Params: params}}, Reply: reply}
@@ -70,6 +77,17 @@ func TestPublicSilenceWaitIsUnknownWhileOwnershipLinkStaysConnected(t *testing.T
 	case <-beta.closed:
 		t.Fatal("mark closed destination")
 	default:
+	}
+	listParams, _ := protocol.EncodeParams("session.list", protocol.SessionListRequest{Host: "beta"})
+	listed := make(chan Reply, 1)
+	alpha.inbox <- OutgoingCall{Value: Forward{From: caller, Request: PublicRequest{Method: "session.list", Params: listParams}}, Reply: listed}
+	select {
+	case value := <-listed:
+		if _, err := protocol.DecodeResult("session.list", value.Result); value.Error != nil || err != nil || !strings.Contains(string(value.Result), `"availability":"not_responding"`) {
+			t.Fatal("actual liveness mark did not supply a valid explicit stub", string(value.Result), value.Error, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("marked directed list did not return")
 	}
 	refused := make(chan Reply, 1)
 	alpha.inbox <- OutgoingCall{Value: Forward{From: caller, Request: PublicRequest{Method: "turn.interrupt", Params: params}}, Reply: refused}

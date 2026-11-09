@@ -994,8 +994,10 @@ return the complete opaque new token without declaring the new capability.
 List aggregation preserves confirmed local and other-host rows. A silent host
 contributes no sessions. Only an opted-in request over supporting hops may get
 `hosts:[{host,products:[],availability:"not_responding"}]` for that leg. Other
-requests keep the old shape with that leg omitted. Opt-in is captured at request
-admission, including aggregates, rather than read from a later hello. If the
+requests keep the old shape with that leg omitted. A generic capacity or admission
+refusal omits the leg without asserting that the host missed its probes. Opt-in
+is captured at request admission, including aggregates, rather than read from a
+later hello. If the
 whole hub cannot answer its hosts request, only confirmed local rows are
 returned; no remote host names are invented. A path through an old intermediary
 provides no new availability information. Trace-owner identity never carries a

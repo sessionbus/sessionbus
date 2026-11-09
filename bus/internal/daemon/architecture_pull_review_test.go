@@ -76,16 +76,27 @@ func TestReviewMixedMulticastDeduplicatesBeforeDelivery(t *testing.T) {
 	}
 }
 
-func TestReviewListAdmissionFailureCannotFallBackToLocal(t *testing.T) {
+func TestReviewFullFederationAdmissionKeepsConfirmedLocalList(t *testing.T) {
 	d := &Daemon{host: "alpha"}
 	d.directory = newDirectory(d, nil)
 	d.federation = &federationLink{inbox: make(chan any, 1), cancel: func() {}}
 	d.federation.inbox <- federation.HostsCall{Reply: make(chan federation.Reply, 1)}
 	s := pullReviewSender(d)
+	s.identity.attachment = s
+	d.directory.entries[s.identity.row.SessionID] = s.identity
+	d.directory.addConnected(s.identity)
 	s.list(protocol.Frame{ID: 1, Method: "session.list", Request: true}, &protocol.SessionListRequest{})
 	value := <-s.forwarded
-	if value.Error == nil || value.Error.Code != protocol.ForwardLost {
-		t.Fatalf("full active federation inbox produced local success: %#v", value)
+	if value.Error != nil {
+		t.Fatalf("full federation inbox discarded confirmed local list: %#v", value)
+	}
+	decoded, err := protocol.DecodeResult("session.list", value.Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := decoded.(*protocol.SessionListResult)
+	if len(listed.Sessions) != 1 || listed.Sessions[0].SessionID != "sender@alpha" || listed.SelfInfo == nil || listed.SelfInfo.SessionID != "sender@alpha" || len(listed.Hosts) != 0 {
+		t.Fatal("local fallback invented federation data or lost self", listed)
 	}
 }
 

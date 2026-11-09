@@ -5,6 +5,7 @@ package daemon
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/antst/sessionbus/bus/internal/federation"
 	"github.com/antst/sessionbus/bus/sdk/go/protocol"
@@ -95,27 +96,102 @@ func TestSilentHubListKeepsLocalRowsWithoutInventingRemoteNames(t *testing.T) {
 }
 
 func TestAvailabilityAggregateIncludesOnlyKnownSilentHost(t *testing.T) {
+	for _, marked := range []bool{false, true} {
+		t.Run(map[bool]string{false: "generic-refusal", true: "successful-marked-stub"}[marked], func(t *testing.T) {
+			d := &Daemon{host: "alpha"}
+			d.directory = newDirectory(d, nil)
+			d.federation = &federationLink{inbox: make(chan any, 1), cancel: func() {}}
+			s := pullReviewSender(d)
+			s.supportsAvailability = true
+			caller := s.federationCaller()
+			hosts := make(chan federation.Reply, 1)
+			hosts <- federation.Reply{Result: []byte(`{"hosts":["beta"]}`)}
+			done := make(chan answer, 1)
+			go func() {
+				done <- s.collectFederatedList(caller, func(<-chan struct{}) (federation.Reply, bool) { return silenceListed("alpha"), true }, hosts, s.identity.done)
+			}()
+			call := (<-d.federation.inbox).(federation.OutgoingCall)
+			if marked {
+				call.Reply <- federation.Reply{Result: []byte(`{"sessions":[],"hosts":[{"host":"beta","products":[],"availability":"not_responding"}]}`)}
+			} else {
+				call.Reply <- federation.Reply{Error: &protocol.RPCError{Code: protocol.ForwardLost, Message: "forward_lost"}}
+			}
+			value := <-done
+			if value.code != 0 {
+				t.Fatal(value.code)
+			}
+			listed := value.value.(*protocol.SessionListResult)
+			if len(listed.Sessions) != 1 || len(listed.Hosts) != 1+boolCount(marked) || listed.Hosts[0].Host != "alpha" || listed.Hosts[0].Availability != "" {
+				t.Fatal("partial availability lost confirmed rows or invented products", listed)
+			}
+			if marked && (listed.Hosts[1].Host != "beta" || listed.Hosts[1].Availability != "not_responding" || len(listed.Hosts[1].Products) != 0) {
+				t.Fatal("actual marked result not preserved", listed)
+			}
+		})
+	}
+}
+
+func boolCount(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func TestLaterListAdmissionRefusalPreservesLocalAndEarlierHealthyLeg(t *testing.T) {
 	d := &Daemon{host: "alpha"}
 	d.directory = newDirectory(d, nil)
-	d.federation = &federationLink{inbox: make(chan any, 1), cancel: func() {}}
+	d.federation = &federationLink{inbox: make(chan any, 1), cancel: func() { t.Error("ordinary list overflow closed link") }}
 	s := pullReviewSender(d)
+	defer close(s.identity.done)
 	s.supportsAvailability = true
-	caller := s.federationCaller()
 	hosts := make(chan federation.Reply, 1)
-	hosts <- federation.Reply{Result: []byte(`{"hosts":["beta"]}`)}
+	hosts <- federation.Reply{Result: []byte(`{"hosts":["beta","gamma","delta"]}`)}
+	postsFinished := make(chan struct{})
 	done := make(chan answer, 1)
 	go func() {
-		done <- s.collectFederatedList(caller, func(<-chan struct{}) (federation.Reply, bool) { return silenceListed("alpha"), true }, hosts, s.identity.done)
+		done <- s.collectFederatedList(s.federationCaller(), func(<-chan struct{}) (federation.Reply, bool) {
+			close(postsFinished)
+			return silenceListed("alpha"), true
+		}, hosts, s.identity.done)
 	}()
+	select {
+	case <-postsFinished:
+	case value := <-done:
+		t.Fatal("later admission refusal discarded local and admitted healthy work", value.code)
+	case <-time.After(time.Second):
+		t.Fatal("post loop did not reach one-shot collection")
+	}
 	call := (<-d.federation.inbox).(federation.OutgoingCall)
-	call.Reply <- federation.Reply{Error: &protocol.RPCError{Code: protocol.ForwardLost, Message: "forward_lost"}}
+	if string(call.Value.Request.Params) != `{"host":"beta"}` {
+		t.Fatal("unexpected or retried leg", string(call.Value.Request.Params))
+	}
+	call.Reply <- silenceListed("beta")
 	value := <-done
 	if value.code != 0 {
 		t.Fatal(value.code)
 	}
 	listed := value.value.(*protocol.SessionListResult)
-	if len(listed.Sessions) != 1 || len(listed.Hosts) != 2 || listed.Hosts[0].Host != "alpha" || listed.Hosts[0].Availability != "" || listed.Hosts[1].Host != "beta" || listed.Hosts[1].Availability != "not_responding" || len(listed.Hosts[1].Products) != 0 {
-		t.Fatal("partial availability lost confirmed rows or invented products", listed)
+	if len(listed.Sessions) != 2 || len(listed.Hosts) != 2 || listed.SelfInfo.SessionID != "sender@alpha" || listed.Hosts[0].Host != "alpha" || listed.Hosts[1].Host != "beta" || listed.Hosts[0].Availability != "" || listed.Hosts[1].Availability != "" || len(d.federation.inbox) != 0 {
+		t.Fatal("partial admission lost confirmed rows or invented host status", listed)
+	}
+}
+
+func TestNonForwardLostListErrorRemainsAnError(t *testing.T) {
+	d := &Daemon{host: "alpha"}
+	d.directory = newDirectory(d, nil)
+	d.federation = &federationLink{inbox: make(chan any, 1), cancel: func() {}}
+	s := pullReviewSender(d)
+	hosts := make(chan federation.Reply, 1)
+	hosts <- federation.Reply{Result: []byte(`{"hosts":["beta"]}`)}
+	done := make(chan answer, 1)
+	go func() {
+		done <- s.collectFederatedList(s.federationCaller(), func(<-chan struct{}) (federation.Reply, bool) { return silenceListed("alpha"), true }, hosts, s.identity.done)
+	}()
+	call := (<-d.federation.inbox).(federation.OutgoingCall)
+	call.Reply <- federation.Reply{Error: &protocol.RPCError{Code: protocol.UnknownSession, Message: "unknown_session"}}
+	if value := <-done; value.code != protocol.ForwardLost || value.value != nil {
+		t.Fatal("non-forward-lost RPC error was turned into partial success", value)
 	}
 }
 
