@@ -11,7 +11,7 @@ type policyRosterObservation struct {
 
 func (s *hubState) policyRosterFlag(host string) {
 	if link := s.links[host]; link != nil {
-		link.liveness.observeRoster.Store(s.relations != nil && s.relations.charges[host] != 0)
+		link.liveness.observeRoster.Store(s.relations.chargedDestination(host))
 	}
 }
 

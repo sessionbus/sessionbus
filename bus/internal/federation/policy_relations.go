@@ -11,20 +11,20 @@ import (
 	"github.com/antst/sessionbus/bus/sdk/go/protocol"
 )
 
-const policyRelationsPerHost = protocol.MaxOperations
+const policyRelationsPerPair = protocol.MaxOperations
 
 // These maps and every mutation of an admission belong to the registry. Link
 // owners carry immutable admission pointers and report authoritative results.
 type policyRelations struct {
 	entries map[string]*policyRelation
 	pending map[*policyAdmission]bool
-	charges map[string]int
-	next    uint64
+	charges map[policyPair]int
 }
+
+type policyPair struct{ source, destination string }
 
 type policyRelation struct {
 	lane, creator, private, parentPrivate string
-	generation                            uint64
 	recorded                              time.Time
 	oneWay                                bool
 }
@@ -59,15 +59,20 @@ func (a *policyAdmission) report(reply Reply, deliver bool) {
 }
 
 func newPolicyRelations() *policyRelations {
-	return &policyRelations{entries: map[string]*policyRelation{}, pending: map[*policyAdmission]bool{}, charges: map[string]int{}}
+	return &policyRelations{entries: map[string]*policyRelation{}, pending: map[*policyAdmission]bool{}, charges: map[policyPair]int{}}
 }
 
 func (r *policyRelations) admit(a *policyAdmission) bool {
 	if a.kind == policyFresh || a.kind == policyResumeAccess {
-		if r.charges[a.destination.host] >= policyRelationsPerHost {
+		source, err := suffix(a.creator)
+		if err != nil || a.destination == nil || !validHost(a.destination.host) {
 			return false
 		}
-		r.charges[a.destination.host]++
+		pair := policyPair{source, a.destination.host}
+		if r.charges[pair] >= policyRelationsPerPair {
+			return false
+		}
+		r.charges[policyPair{policySourceHost(a.creator), a.destination.host}]++
 	}
 	r.pending[a] = true
 	return true
@@ -79,7 +84,7 @@ func (r *policyRelations) complete(a *policyAdmission, reply Reply, current bool
 	}
 	delete(r.pending, a)
 	if a.kind == policyFresh || a.kind == policyResumeAccess {
-		r.charges[a.destination.host]--
+		r.charges[policyPair{policySourceHost(a.creator), a.destination.host}]--
 	}
 	if reply.Error != nil {
 		return reply, true
@@ -101,16 +106,12 @@ func (r *policyRelations) complete(a *policyAdmission, reply Reply, current bool
 			if r.entries[id] != nil {
 				return errorReply(protocol.ForwardLost, nil), true
 			}
-			r.next++
-			if r.next == 0 {
-				return errorReply(protocol.ForwardLost, nil), true
-			}
-			entry := &policyRelation{lane: id, creator: a.creator, parentPrivate: a.private, generation: r.next, recorded: time.Now(), oneWay: a.kind == policyResumeAccess}
+			entry := &policyRelation{lane: id, creator: a.creator, parentPrivate: a.private, recorded: time.Now(), oneWay: a.kind == policyResumeAccess}
 			if !entry.oneWay {
 				entry.private = a.private + "/" + a.name
 			}
 			r.entries[id] = entry
-			r.charges[a.destination.host]++
+			r.charges[policyPair{policySourceHost(a.creator), a.destination.host}]++
 		}
 	case policyForget:
 		if a.entry != nil && r.entries[a.id] == a.entry {
@@ -124,7 +125,7 @@ func (r *policyRelations) remove(entry *policyRelation) {
 	if r.entries[entry.lane] == entry {
 		delete(r.entries, entry.lane)
 		host, _ := suffix(entry.lane)
-		r.charges[host]--
+		r.charges[policyPair{policySourceHost(entry.creator), host}]--
 	}
 }
 
@@ -215,6 +216,19 @@ func snapshotCounterpart(entries []*policyRelation, first, second string) bool {
 	for _, entry := range entries {
 		if !entry.oneWay && (entry.lane == first && entry.creator == second || entry.lane == second && entry.creator == first) {
 			return true
+		}
+	}
+	return false
+}
+
+func policySourceHost(id string) string { host, _ := suffix(id); return host }
+
+func (r *policyRelations) chargedDestination(host string) bool {
+	if r != nil {
+		for pair, count := range r.charges {
+			if pair.destination == host && count != 0 {
+				return true
+			}
 		}
 	}
 	return false

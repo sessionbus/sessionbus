@@ -16,6 +16,8 @@ func TestDEV1BotHubReplyDoesNotBlockItsFullOwnerInbox(t *testing.T) {
 	defer cancel()
 	h := &hubTransfers{ctx: ctx}
 	link := &hostLink{inbox: make(chan any, 1), done: make(chan struct{})}
+	prepareReplyFixture(t, link)
+	link.originAdmitted = 1
 	link.inbox <- struct{}{}
 	var released atomic.Int32
 	frame := connTransferFrame{release: func() { released.Add(1) }}
@@ -35,6 +37,15 @@ func TestDEV1BotHubReplyDoesNotBlockItsFullOwnerInbox(t *testing.T) {
 	}
 	if blocked {
 		t.Error("hub reply waited on its own full owner inbox until context cancellation")
+	}
+	if released.Load() != 0 {
+		t.Fatal("enqueue released an unconsumed response")
+	}
+	select {
+	case event := <-link.originReplies:
+		link.consumeOriginReply(event)
+	default:
+		t.Fatal("dedicated reply missing")
 	}
 	if released.Load() != 1 {
 		t.Errorf("release count %d", released.Load())

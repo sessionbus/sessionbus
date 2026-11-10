@@ -59,20 +59,23 @@ func policyTransferLink(t *testing.T, ctx context.Context, host string, identity
 		hooks = controls[0]
 	}
 	link := &hostLink{host: host, attachment: host + "-attachment", fd: policyTransferFD(t, host), inbox: make(chan any, 8), done: make(chan struct{})}
+	prepareReplyFixture(t, link)
 	joined := make(chan struct{})
 	var sequence atomic.Int32
 	go func() {
 		defer close(joined)
 		for {
 			select {
-			case raw := <-link.inbox:
-				if result, ok := raw.(originReply); ok && hooks.reply != nil {
-					if result.release != nil {
-						result.release()
-					}
-					hooks.reply <- result
-					continue
+			case result := <-link.originReplies:
+				if result.release != nil {
+					result.release()
 				}
+				if hooks.reply == nil {
+					t.Error("unexpected reply without callback observer")
+				} else {
+					hooks.reply <- result
+				}
+			case raw := <-link.inbox:
 				call, ok := raw.(TransferCall)
 				if !ok {
 					t.Error("unexpected callback fixture event")
@@ -206,6 +209,7 @@ func TestPolicyRegistryTransferBudgetPrecedesBindFanout(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	origin := &hostLink{host: "alpha", attachment: "origin", fd: policyTransferFD(t, "alpha"), inbox: make(chan any, 1), done: make(chan struct{})}
+	prepareReplyFixture(t, origin)
 	destination := &hostLink{host: "beta", fd: policyTransferFD(t, "beta"), inbox: make(chan any, 1), done: make(chan struct{})}
 	h := newHubTransfers(ctx)
 	var reservations []*transfer.Reservation
@@ -226,10 +230,9 @@ func TestPolicyRegistryTransferBudgetPrecedesBindFanout(t *testing.T) {
 	var released atomic.Int32
 	state.handle(ctx, nil, registryEvent{kind: registryTransferCreate, link: origin, transfer: &connTransferFrame{value: protocol.Frame{ID: 1, Method: TransferCreateMethod, Params: raw}, release: func() { released.Add(1) }}})
 	select {
-	case event := <-origin.inbox:
-		reply, ok := event.(originReply)
-		if !ok || reply.value.Error == nil {
-			t.Fatal("full existing budget dispatched a bind", event)
+	case reply := <-origin.originReplies:
+		if reply.value.Error == nil {
+			t.Fatal("full existing budget dispatched a bind", reply)
 		}
 		reply.release()
 	default:
@@ -261,7 +264,7 @@ func TestPolicyRegistryTransferCapturesRelationBeforeBindAndReload(t *testing.T)
 	h := newHubTransfers(ctx)
 	relations := newPolicyRelations()
 	entry := &policyRelation{lane: to.SessionID, creator: from.SessionID, parentPrivate: "session:parent@alpha", private: "session:parent@alpha/child"}
-	relations.entries[entry.lane], relations.charges["beta"] = entry, 1
+	relations.entries[entry.lane], relations.charges[policyPair{"alpha", "beta"}] = entry, 1
 	state := hubState{policy: testPolicy(t, `{"hosts":{"alpha":{"groups":[]}}}`), transfers: h, relations: relations, links: map[string]*hostLink{"alpha": origin, "beta": destination}}
 	input := TransferCreate{From: policyTestCaller(), Generation: "generation", Target: "alias@beta", Kind: "offer", Name: "file"}
 	raw, _ := json.Marshal(input)

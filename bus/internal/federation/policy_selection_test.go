@@ -85,9 +85,9 @@ func TestPolicyProbeSelectionStampPublishesBeforeReplyAndPruning(t *testing.T) {
 				recorded = time.Now()
 			}
 			state := hubState{relations: newPolicyRelations(), links: map[string]*hostLink{"beta": link}}
-			entry := &policyRelation{lane: "child@beta", recorded: recorded}
+			entry := &policyRelation{lane: "child@beta", creator: "parent@alpha", recorded: recorded}
 			if mode != "untracked" {
-				state.relations.entries[entry.lane], state.relations.charges["beta"] = entry, 1
+				state.relations.entries[entry.lane], state.relations.charges[policyPair{"alpha", "beta"}] = entry, 1
 			}
 			response := RosterReply(roster.Host{Host: "beta", Products: []string{}, Sessions: []roster.Row{}})
 			if _, err := decodeRosterReply(response.Result); response.Error != nil || err != nil {

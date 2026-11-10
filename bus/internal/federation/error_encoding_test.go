@@ -4,10 +4,12 @@ package federation
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/antst/sessionbus/bus/sdk/go/protocol"
@@ -72,16 +74,29 @@ func TestOutgoingErrorSchemaAndRawPrecedence(t *testing.T) {
 	if err != nil || !bytes.Equal(got, want) || !bytes.Equal(raw, original) {
 		t.Fatalf("valid raw precedence/bytes changed: %s %v", got, err)
 	}
-	for _, value := range []Reply{errorReply(protocol.SpawnFailed, "native diagnostic"), errorReply(protocol.ForwardLost, nil), errorReply(protocol.PolicyDenied, nil)} {
-		body, err := ResponseBytes(8, value)
+	for _, test := range []struct {
+		code int
+		data any
+	}{
+		{protocol.SpawnFailed, struct {
+			StderrTail []string `json:"stderr_tail"`
+		}{[]string{"native diagnostic"}}},
+		{protocol.ForwardLost, nil}, {protocol.PolicyDenied, nil},
+	} {
+		body, err := ResponseBytes(8, errorReply(test.code, test.data))
 		if err != nil {
 			t.Fatal(err)
 		}
 		frame, err := protocol.DecodeFrame(body)
-		if err != nil || frame.Error.Code != value.Error.Code || !bytes.Equal(frame.Error.Data, value.Error.Data) {
+		var expected []byte
+		if test.data != nil {
+			expected, _ = json.Marshal(test.data)
+		}
+		if err != nil || frame.Error == nil || frame.Error.Code != test.code || !bytes.Equal(frame.Error.Data, expected) {
 			t.Fatalf("valid error changed: %s %v", body, err)
 		}
 	}
+
 }
 
 func TestOutgoingErrorLogOnceAcrossSerializerEntries(t *testing.T) {
@@ -95,7 +110,77 @@ func TestOutgoingErrorLogOnceAcrossSerializerEntries(t *testing.T) {
 	cmd := exec.Command(os.Args[0], "-test.run=^TestOutgoingErrorLogOnceAcrossSerializerEntries$")
 	cmd.Env = append(os.Environ(), "SESSIONBUS_TEST_SHARED_ERROR_LOG_CHILD=1")
 	out, err := cmd.CombinedOutput()
-	if err != nil || strings.Count(string(out), "cannot encode daemon RPC error") != 1 {
+	if err != nil || strings.Count(string(out), "cannot encode daemon RPC error") != 3 {
 		t.Fatalf("once log=%s error=%v", out, err)
+	}
+}
+
+func TestOutgoingErrorLoggingHasFiniteCodeDomain(t *testing.T) {
+	if os.Getenv("SESSIONBUS_TEST_FINITE_ERROR_LOG_CHILD") == "1" {
+		var schema map[string]any
+		if err := json.Unmarshal(protocol.SessionSchema, &schema); err != nil {
+			t.Fatal(err)
+		}
+		values := schema["$defs"].(map[string]any)["RPCError"].(map[string]any)["properties"].(map[string]any)["code"].(map[string]any)["enum"].([]any)
+		codes := make([]int, len(values))
+		for index, value := range values {
+			codes[index] = int(value.(float64))
+		}
+
+		if len(codes) == 0 {
+			t.Fatal("missing schema code authority")
+		}
+		// The selected raw code must win over the conflicting typed Busy. The first
+		// arbitrary value is retained exactly in the ONE shared unknown log bucket.
+		_, _ = ResponseBytes(1, Reply{Error: &protocol.RPCError{Code: protocol.Busy}, ErrorRaw: []byte(`{"code":987654321987654321987654321,"message":"bad","data":"SECRET_PAYLOAD"}`)})
+		var group sync.WaitGroup
+		for _, code := range codes {
+			for range 8 {
+				group.Add(1)
+				go func(code int) {
+					defer group.Done()
+					body := ErrorBytes(2, code, make(chan int))
+					frame, err := protocol.DecodeFrame(body)
+					if err != nil || frame.Error == nil || frame.Error.Code != protocol.Internal || string(frame.Error.Data) != `"internal"` {
+						t.Error("fallback changed")
+					}
+				}(code)
+			}
+		}
+		for code := 0; code < 256; code++ {
+			_, _ = ResponseBytes(3, Reply{ErrorRaw: json.RawMessage(fmt.Sprintf(`{"code":%d,"message":"invalid","data":"SECRET_PAYLOAD"}`, code))})
+		}
+		for _, raw := range []string{`{"code":1.5}`, `{"code":-1e99}`, `{"code":null}`, `{"code":"SECRET_PAYLOAD"}`, `{}`} {
+			_, _ = ResponseBytes(4, Reply{ErrorRaw: []byte(raw)})
+		}
+		group.Wait()
+		count := 0
+		errorEncodingLog.Range(func(key, value any) bool {
+			count++
+			numeric, ok := key.(int)
+			if !ok {
+				t.Error("non-integer log key")
+			}
+			if numeric != 0 {
+				found := false
+				for _, code := range codes {
+					found = found || numeric == code
+				}
+				if !found {
+					t.Error("arbitrary key", numeric)
+				}
+			}
+			return true
+		})
+		if count != len(codes)+1 {
+			t.Fatal("unbounded or missing log domain", count, len(codes))
+		}
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestOutgoingErrorLoggingHasFiniteCodeDomain$")
+	cmd.Env = append(os.Environ(), "SESSIONBUS_TEST_FINITE_ERROR_LOG_CHILD=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil || strings.Count(string(out), "cannot encode daemon RPC error") != 22 || !strings.Contains(string(out), "code=987654321987654321987654321;") || strings.Contains(string(out), "SECRET_PAYLOAD") {
+		t.Fatalf("finite logging=%s error=%v", out, err)
 	}
 }

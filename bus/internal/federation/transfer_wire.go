@@ -4,8 +4,10 @@ package federation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 
+	"github.com/antst/sessionbus/bus/internal/transfer"
 	"github.com/antst/sessionbus/bus/sdk/go/protocol"
 )
 
@@ -204,9 +206,32 @@ func validateTransferResult(method string, raw json.RawMessage) bool {
 		return err == nil
 	}
 }
+
+// TransferError preserves an observed semantic refusal. Transport, cancellation,
+// and post-allocation association failures must remain unavailable.
+func TransferError(err error) (int, any) {
+	var rpc *protocol.RPCError
+	if errors.As(err, &rpc) {
+		switch rpc.Code {
+		case protocol.Busy, protocol.UnsupportedTransfer, protocol.TransferFailed:
+			return rpc.Code, nil
+		}
+		return protocol.Internal, "transfer_unavailable"
+	}
+	switch {
+	case errors.Is(err, transfer.ErrCapacity):
+		return protocol.Busy, nil
+	case errors.Is(err, transfer.ErrUnsupported):
+		return protocol.UnsupportedTransfer, nil
+	case errors.Is(err, transfer.ErrUnknown), errors.Is(err, transfer.ErrRole), errors.Is(err, transfer.ErrState):
+		return protocol.TransferFailed, nil
+	}
+	return protocol.Internal, "transfer_unavailable"
+}
 func transferReply(value any, err error) Reply {
 	if err != nil {
-		return errorReply(protocol.Internal, "transfer_unavailable")
+		code, data := TransferError(err)
+		return errorReply(code, data)
 	}
 	raw, e := json.Marshal(value)
 	if e != nil {

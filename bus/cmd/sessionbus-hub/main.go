@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/antst/sessionbus/bus/internal/federation"
 )
@@ -79,6 +80,9 @@ func runWithIO(arguments []string, stdout, stderr io.Writer) error {
 	var policy *federation.Policy
 	if policyPath != "" {
 		policy, err = federation.LoadPolicy(policyPath)
+		if err == nil {
+			err = policy.ValidateHosts(secrets)
+		}
 		if err != nil {
 			return err
 		}
@@ -90,17 +94,20 @@ func runWithIO(arguments []string, stdout, stderr io.Writer) error {
 	hub := federation.StartHubWithPolicy(listener, configuration, stderr, policy)
 	defer hub.Close()
 	interrupt := make(chan os.Signal, 1)
-	if policyPath == "" {
-		signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
-	} else {
-		signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	}
+	signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(interrupt)
 	for signal := range interrupt {
 		if signal != syscall.SIGHUP {
 			return nil
 		}
+		if policyPath == "" {
+			fmt.Fprintln(stderr, "federation SIGHUP ignored: --policy is not configured")
+			continue
+		}
 		updated, err := federation.LoadPolicy(policyPath)
+		if err == nil {
+			err = updated.ValidateHosts(secrets)
+		}
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			continue
@@ -108,6 +115,7 @@ func runWithIO(arguments []string, stdout, stderr io.Writer) error {
 		if !hub.ReloadPolicy(updated) {
 			return nil
 		}
+		fmt.Fprintf(stderr, "federation policy reloaded path=%q time=%s\n", policyPath, time.Now().UTC().Format(time.RFC3339Nano))
 	}
 	return nil
 }

@@ -24,11 +24,11 @@ func TestPolicyAuthoritativeCompletionPrecedesReplyAndMarkDoesNotRetire(t *testi
 			call := pendingCall{forwarded: true, policy: admission, reply: reply}
 			if mode == "duplicate" {
 				s.relations.entries["child@beta"] = &policyRelation{lane: "child@beta", creator: "other@alpha"}
-				s.relations.charges["beta"]++
+				s.relations.charges[policyPair{"alpha", "beta"}]++
 			}
 			if mode == "marked" {
 				notifyCall(&call, errorReply(protocol.ForwardLost, nil))
-				if first := <-reply; first.Error == nil || s.relations.charges["beta"] != 1 || !s.relations.pending[admission] {
+				if first := <-reply; first.Error == nil || s.relations.charges[policyPair{"alpha", "beta"}] != 1 || !s.relations.pending[admission] {
 					t.Fatal("mark was converted into authoritative retirement")
 				}
 			}
@@ -64,14 +64,14 @@ func TestPolicyAuthoritativeCompletionPrecedesReplyAndMarkDoesNotRetire(t *testi
 				}
 			}
 			if mode == "valid" || mode == "marked" {
-				if !s.relations.counterpart("parent@alpha", "child@beta") || s.relations.charges["beta"] != 1 {
+				if !s.relations.counterpart("parent@alpha", "child@beta") || s.relations.charges[policyPair{"alpha", "beta"}] != 1 {
 					t.Fatal("valid late identity grant was not recorded")
 				}
 			} else if mode == "duplicate" {
-				if s.relations.entries["child@beta"].creator != "other@alpha" || s.relations.charges["beta"] != 1 {
+				if s.relations.entries["child@beta"].creator != "other@alpha" || s.relations.charges[policyPair{"alpha", "beta"}] != 1 {
 					t.Fatal("collision changed the previous grant")
 				}
-			} else if len(s.relations.entries) != 0 || s.relations.charges["beta"] != 0 {
+			} else if len(s.relations.entries) != 0 || s.relations.charges[policyPair{"alpha", "beta"}] != 0 {
 				t.Fatal("failed admission retained a grant or charge")
 			}
 			s.handle(context.Background(), registry, event)
@@ -86,8 +86,8 @@ func TestPolicyRosterRejectsStaleAttachmentAndIncompleteData(t *testing.T) {
 	old, current := &hostLink{host: "beta"}, &hostLink{host: "beta"}
 	when := time.Now()
 	s := hubState{links: map[string]*hostLink{"beta": current}, relations: newPolicyRelations()}
-	s.relations.entries["child@beta"] = &policyRelation{lane: "child@beta", recorded: when}
-	s.relations.charges["beta"] = 1
+	s.relations.entries["child@beta"] = &policyRelation{lane: "child@beta", creator: "parent@alpha", recorded: when}
+	s.relations.charges[policyPair{"alpha", "beta"}] = 1
 	complete := Reply{Result: []byte(`{"hosts":[{"host":"beta","products":[],"sessions":[]}]}`)}
 	s.observePolicyRoster(old, policyRosterObservation{selected: when.Add(time.Second), reply: complete})
 	s.observePolicyRoster(current, policyRosterObservation{selected: when.Add(-time.Second), reply: complete})
@@ -96,7 +96,7 @@ func TestPolicyRosterRejectsStaleAttachmentAndIncompleteData(t *testing.T) {
 		t.Fatal("stale/incomplete roster pruned a current relation")
 	}
 	s.observePolicyRoster(current, policyRosterObservation{selected: when.Add(time.Second), reply: complete})
-	if s.relations.entries["child@beta"] != nil || s.relations.charges["beta"] != 0 || current.liveness.observeRoster.Load() {
+	if s.relations.entries["child@beta"] != nil || s.relations.charges[policyPair{"alpha", "beta"}] != 0 || current.liveness.observeRoster.Load() {
 		t.Fatal("fresh complete current roster did not retire observation/entry")
 	}
 }

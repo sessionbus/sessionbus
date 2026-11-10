@@ -26,7 +26,7 @@ func loadFixturePolicy(t *testing.T, raw string) *federation.Policy {
 	return policy
 }
 
-func policyDaemonFixture(t *testing.T) (*federation.Hub, map[string]*Daemon, map[string]*peerClient) {
+func policyDaemonFixture(t *testing.T, advertised ...string) (*federation.Hub, map[string]*Daemon, map[string]*peerClient) {
 	t.Helper()
 	products := t.TempDir()
 	installFixture(t, products, "fixture-worker")
@@ -46,7 +46,7 @@ func policyDaemonFixture(t *testing.T) (*federation.Hub, map[string]*Daemon, map
 	daemons, peers := map[string]*Daemon{}, map[string]*peerClient{}
 	for _, host := range []string{"alpha", "beta"} {
 		dir := testsocket.Directory(t)
-		d, err := Start(Config{Host: host, SocketPath: filepath.Join(dir, "bus.sock"), TablePath: filepath.Join(dir, "rows"), HubAddress: listener.Addr().String(), HubSecret: secrets[host]})
+		d, err := Start(Config{Host: host, SocketPath: filepath.Join(dir, "bus.sock"), TablePath: filepath.Join(dir, "rows"), HubAddress: listener.Addr().String(), HubSecret: secrets[host], Products: append([]string(nil), advertised...)})
 		must(t, err)
 		t.Cleanup(func() { _ = d.Close() })
 		daemons[host] = d

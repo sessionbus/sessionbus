@@ -2,6 +2,7 @@
 package federation
 
 import (
+	"bytes"
 	"encoding/json"
 	"log"
 	"strconv"
@@ -10,13 +11,56 @@ import (
 	"github.com/antst/sessionbus/bus/sdk/go/protocol"
 )
 
-var errorEncodingLog sync.Once
+// Supported codes have one key each. All invalid/arbitrary codes share zero,
+// so the fallback path cannot grow a map from attacker-controlled integers.
+var errorEncodingLog sync.Map
 
 const fallbackError = `{"code":-32603,"message":"internal","data":"internal"}`
 
-func fallbackErrorRaw(err error) json.RawMessage {
-	errorEncodingLog.Do(func() { log.Printf("cannot encode daemon RPC error: %v", err) })
+func fallbackErrorRaw(code string) json.RawMessage {
+	key := 0
+	if numeric, err := strconv.Atoi(code); err == nil {
+		var data any
+		switch numeric {
+		case protocol.Internal:
+			data = "internal"
+		case protocol.SpawnFailed:
+			data = struct {
+				StderrTail []string `json:"stderr_tail"`
+			}{StderrTail: []string{}}
+		}
+		// The low-level serializer's schema is the finite supported-code
+		// authority; it does not call this federation fallback.
+		if _, err := protocol.ErrorBytes(1, numeric, data); err == nil {
+			key = numeric
+		}
+	}
+	if _, loaded := errorEncodingLog.LoadOrStore(key, struct{}{}); !loaded {
+		// Never log the validator error: it can contain error-data payloads.
+		log.Printf("cannot encode daemon RPC error: code=%s; using internal fallback", code)
+	}
 	return json.RawMessage(fallbackError)
+}
+
+func replyErrorCode(reply Reply) string {
+	if len(reply.ErrorRaw) == 0 {
+		if reply.Error != nil {
+			return strconv.Itoa(reply.Error.Code)
+		}
+		return "unknown"
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(reply.ErrorRaw, &fields) == nil {
+		decoder := json.NewDecoder(bytes.NewReader(fields["code"]))
+		decoder.UseNumber()
+		var value any
+		if decoder.Decode(&value) == nil {
+			if number, ok := value.(json.Number); ok {
+				return string(number)
+			}
+		}
+	}
+	return "unknown"
 }
 
 // ErrorBytes is the shared typed-error serializer for daemon and hub replies.
@@ -26,7 +70,7 @@ func ErrorBytes(id int64, code int, data any) []byte {
 	if err == nil {
 		return body
 	}
-	raw := fallbackErrorRaw(err)
+	raw := fallbackErrorRaw(strconv.Itoa(code))
 	body = strconv.AppendInt([]byte(`{"jsonrpc":"2.0","id":`), id, 10)
 	body = append(body, `,"error":`...)
 	body = append(body, raw...)
@@ -47,7 +91,7 @@ func replyErrorRaw(reply Reply) json.RawMessage {
 		_, err = protocol.DecodeError(raw)
 	}
 	if err != nil {
-		return fallbackErrorRaw(err)
+		return fallbackErrorRaw(replyErrorCode(reply))
 	}
 	return raw
 }
@@ -57,6 +101,6 @@ func errorResponseBytes(id int64, reply Reply) []byte {
 	if err == nil {
 		return body
 	}
-	body, _ = rawResponseBytes(id, `,"error":`, fallbackErrorRaw(err))
+	body, _ = rawResponseBytes(id, `,"error":`, fallbackErrorRaw(replyErrorCode(reply)))
 	return body
 }

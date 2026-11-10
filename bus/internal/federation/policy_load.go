@@ -123,3 +123,33 @@ func policyNames(raw []byte, groups bool) (map[string]bool, error) {
 	}
 	return result, nil
 }
+
+// ValidateHosts binds all policy dimensions to the loaded secret-map names.
+// Offline but configured hosts remain valid; no secret contents are reported.
+func (p *Policy) ValidateHosts(secrets map[string]string) error {
+	if p == nil {
+		return nil
+	}
+	check := func(host string) error {
+		if _, ok := secrets[host]; !ok {
+			return fmt.Errorf("unknown federation policy host %q", host)
+		}
+		return nil
+	}
+	for host, rules := range p.hosts {
+		if err := check(host); err != nil {
+			return err
+		}
+		for name := range rules.lanesOn {
+			if err := check(name); err != nil {
+				return err
+			}
+		}
+		for name := range rules.lanesTo {
+			if err := check(name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}

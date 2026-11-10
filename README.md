@@ -387,10 +387,14 @@ Worker ownership ends with the lost connection and is not restored by reconnect.
 Use `sessionbus roster --local` to inspect local peers during a hub outage;
 the default roster reports incomplete federation until recovery.
 
-The hub can restrict federation groups and remote lane execution with an optional
-mode-0600 `--policy FILE`. Missing rules preserve existing behavior; empty lists
-deny that dimension. SIGHUP atomically reloads a valid replacement without a
-restart. Local host access remains unchanged. See the [policy contract](bus/docs/FEDERATION-POLICY.md)
+The hub's optional mode-0600 `--policy FILE` is **EXPERIMENTAL**. Do not enable
+it on a real hub yet. It restricts federation groups and remote lane execution;
+local host access is unchanged. Its in-memory creator relations are lost on hub
+restart, private-only resume restores only one-way access, and closed lanes keep
+slots in the 256-grant limit for each source/destination pair until forgotten or
+pruned. Lanes-only and unlisted pairs retain the claimed-identity limitation.
+Missing rules preserve existing behavior; empty lists deny that dimension.
+SIGHUP atomically reloads a valid replacement without restarting links. See the [policy contract](bus/docs/FEDERATION-POLICY.md)
 for examples, creator/access-grant lifetime, rollout and limits.
 
 The host installer waits at most ten seconds for an authenticated local list response.

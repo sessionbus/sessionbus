@@ -377,10 +377,11 @@ func (s *session) collectFederatedList(caller federation.Caller, local federatio
 }
 
 type messageLeg struct {
-	labels []string
-	wait   federation.Wait
-	reply  <-chan federation.Reply
-	code   int
+	labels        []string
+	wait          federation.Wait
+	reply         <-chan federation.Reply
+	code          int
+	failureReason string
 }
 
 // Trace collection is optional for ordinary sends; the federation transport
@@ -488,7 +489,11 @@ func collectMessageSend(messageID string, legs []messageLeg, order []string, don
 				return answer{code: leg.code, trace: traceRefs}
 			}
 			for _, label := range leg.labels {
-				result.Deliveries = append(result.Deliveries, protocol.MessageSendDelivery{Target: label, Disposition: "rejected", Reason: reason(leg.code, "no_receipt")})
+				why := leg.failureReason
+				if why == "" {
+					why = reason(leg.code, "no_receipt")
+				}
+				result.Deliveries = append(result.Deliveries, protocol.MessageSendDelivery{Target: label, Disposition: "rejected", Reason: why})
 			}
 			continue
 		}
@@ -514,7 +519,11 @@ func collectMessageSend(messageID string, legs []messageLeg, order []string, don
 				return answer{code: value.code, data: value.data, trace: traceRefs}
 			}
 			for _, label := range leg.labels {
-				result.Deliveries = append(result.Deliveries, protocol.MessageSendDelivery{Target: label, Disposition: "rejected", Reason: reason(value.code, "no_receipt")})
+				why := leg.failureReason
+				if why == "" {
+					why = reason(value.code, "no_receipt")
+				}
+				result.Deliveries = append(result.Deliveries, protocol.MessageSendDelivery{Target: label, Disposition: "rejected", Reason: why})
 			}
 			continue
 		}
@@ -540,13 +549,16 @@ func (s *session) collectGroupSend(caller federation.Caller, input *protocol.Mes
 		return answer{code: protocol.NotConnected}
 	}
 	names, err := federation.DecodeHosts(roster)
+	legs := []messageLeg{{wait: local, labels: []string{input.Group + "@" + s.daemon.host}, failureReason: "no_receipt"}}
 	if err != nil {
-		return answer{code: protocol.ForwardLost}
+		legs = append(legs, messageLeg{labels: []string{input.Group}, code: protocol.ForwardLost, failureReason: "no_receipt"})
+		return collectMessageSend(messageID, legs, nil, done, protocol.ForwardLost)
 	}
-	legs := []messageLeg{{wait: local}}
 	for _, host := range names {
 		request := &protocol.MessageSendRequest{Group: input.Group, Host: host, Message: input.Message}
-		legs = append(legs, s.newMessageLeg(caller, messageID, host, request, nil))
+		leg := s.newMessageLeg(caller, messageID, host, request, []string{input.Group + "@" + host})
+		leg.failureReason = "no_receipt"
+		legs = append(legs, leg)
 	}
 	return collectMessageSend(messageID, legs, nil, done, protocol.ForwardLost)
 }

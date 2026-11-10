@@ -130,7 +130,7 @@ func TestPolicyActualRelationCapCountsLiveAndInFlightAndForgetReleases(t *testin
 	request := func(name string) PublicRequest {
 		return policyTestRequest(t, "lane.spawn", protocol.LaneSpawnRequest{Host: "beta", Name: name, Product: "fixture-worker", Open: &protocol.OpenOptions{}})
 	}
-	for i := 0; i < policyRelationsPerHost-2; i++ {
+	for i := 0; i < policyRelationsPerPair-2; i++ {
 		name := fmt.Sprintf("child%d", i)
 		if reply := policyTestForward(t, alpha, caller, request(name)); reply.Error != nil {
 			t.Fatal("live grants refused below cap", i, reply.Error)

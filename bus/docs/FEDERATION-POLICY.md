@@ -1,4 +1,7 @@
-# Optional hub federation policy
+# Experimental hub federation policy
+
+**EXPERIMENTAL: do not enable this on a real hub yet.** The relation-table
+limitations below must be addressed before relying on it.
 
 `sessionbus-hub --policy /absolute/path/policy.json` limits federation at the
 hub. It does not restrict local sessions or change the host secret map. The
@@ -12,12 +15,17 @@ Omitting the option leaves forwarding unchanged. An absent host entry or field
 leaves that dimension unrestricted; an empty array permits nothing in that
 dimension. Group and lane rules are independent. Names are literal, with no
 globs. Group rules contain named groups, not internal `session:` groups.
-Unknown, duplicate, null and malformed fields are refused. An explicitly missing
+Unknown, duplicate, null and malformed fields are refused. Every host key and
+every name in `lanes_on` or `lanes_to` must occur in the loaded host secret map,
+including known hosts that are currently offline. A typo is an error naming that
+host; it cannot silently leave the intended host unrestricted. An explicitly missing
 or invalid policy fails startup before opening the listener.
 
 After replacing the file, send SIGHUP to the hub process to validate and install
 the whole replacement atomically. A bad replacement logs one error and retains
-the old policy. Reload does not restart the hub or cut connections. Host-secret
+the old policy. A successful applied reload logs its path and time once. SIGHUP
+on a hub started without `--policy` is logged and ignored; it does not enable
+policy or kill the hub. Reload does not restart the hub or cut connections. Host-secret
 registration still follows its existing restart procedure.
 
 ## Groups and existing work
@@ -79,14 +87,20 @@ entry generation. Name-based forget relies on later roster cleanup. A complete
 successful current-attachment roster whose request was selected after recording
 may remove an absent lane; errors, incomplete replies, offline-retained rows and
 older selections cannot prove absence. A modified host can retain its legitimate
-entries by reporting rows. Each destination has at most 256 live plus in-flight
-relation grants; new grants are refused at capacity, with no live-entry eviction.
+entries by reporting rows. Each `(source, destination)` pair has at most 256 live plus in-flight relation
+grants; a full pair returns `busy` without data, with no live-entry eviction.
+Another source or the reverse direction has its own allowance. This replaces
+the former destination-wide charge. Closed but not forgotten lanes still hold
+slots. A destination without roster negotiation cannot provide roster pruning.
 Authoritative target identity and grant recording precede public spawn success.
 A late success after a silence answer can still record the grant, without a
 second public answer or replay. Foreign, conflicting or stale-attachment success
 is reported unconfirmed and cannot replace a grant.
 
-The table is memory-only and empty after a hub restart. Existing entries are
+The table is memory-only and empty after a hub restart. Enabling a groups rule
+after previously untracked lane creation also cannot recover the original
+creator relation; SIGHUP does not reconstruct history. Existing tracked entries
+are retained when their rules change. Existing entries are
 reused unchanged on resume, without adding another resumer. With no entry, a
 successful resume whose forwarded groups were **only the verified canonical own
 private group** proves deliberate access: creation or an explicit `extra_groups`
@@ -114,8 +128,10 @@ transport behavior.
 
 The new token is code `-32017`, message/reason `federation_policy_denied`.
 Policy refusals do not cut a link and are not transport-loss answers. Destination
-visibility failures retain their existing unknown answers; transfers retain their
-existing unavailable path. Message delivery reasons remain arbitrary strings;
+visibility failures retain their existing unknown answers. Transfers preserve
+explicit `busy`, `unsupported_transfer` and `transfer_failed` refusals across the
+bridge; lost responses, ended generations and post-create association failures
+retain `internal` / `transfer_unavailable` uncertainty. Message delivery reasons remain arbitrary strings;
 this adds one token without narrowing product-specific reasons.
 
 A kit declares `info.sessionbus_policy:1` and receives `policy/1` only when that
@@ -131,3 +147,65 @@ no policy enforcement; an old daemon may display an unknown future kit Info key
 as public metadata. The new Go and JavaScript SDKs declare the bit automatically;
 raw connection owners must declare it themselves. No additional runtime or
 package dependency is introduced.
+
+## Product inventory and tracing
+
+A host with limits sees another host's published products only when the two
+share an allowed group or lanes are allowed from the listing host to that host.
+A host that is not responding can still appear, marked not responding, as before.
+A lanes-only pair forwards the same broad list with a fresh random private
+identity and no named groups: the destination supplies its real products and
+zero visible sessions. A responding pair allowing neither groups nor lanes
+keeps the empty short-circuit. Published products are useful discovery, not
+launch authority: direct describe/spawn still consult the destination's service
+PATH.
+
+At the existing trace-recipient reply filter, a recorded symmetric creator/lane
+counterpart remains eligible. Other recipients across a restricted pair need a
+named group allowed for both hosts. Kept entries retain their exact owner,
+lifetime and required private identity group, with named groups clipped to the
+allowed intersection. These named groups govern eligibility at that filter;
+they do not add a new trace-copy submission path. Existing trace-parent and
+exact target/lifetime checks still govern delivery. A reconstructed one-way
+resume does not restore reverse trace. Restart or missing original tracking
+therefore leaves only independent allowed named-group eligibility.
+
+## Experimental limits and future work
+
+An empty `{}` host entry still enables relation tracking and associated complete
+roster observations while charges exist; it is not the same as omitting the
+host. Ordinary liveness probes remain independently negotiated. Lanes-only and
+unlisted pairs do not verify source-claimed session/private-group identity
+through this relation table. A modified authenticated source can exploit that
+existing identity gap; lane rules alone do not close it.
+
+The policy matrix tests skip unless their environment is supplied. The retained
+live matrix evidence was a one-off isolated acceptance run, not a default-CI or
+fleet guarantee. No fleet hub is enabled by this release.
+
+**Open next step before policy reliance:** redesign the relation table. The
+proposal to replace it with verified canonical private-group forwarding still
+needs a fresh check of the private-group bypass concern. Notice, nested-spawn
+and restricted-trace trade-offs need a separate decision; no redesign is
+implemented here. The duplicate error converter and four code/message tables
+without a parity test remain recorded cleanup work.
+
+## Shipped systemd user unit
+
+The shipped unit has no policy environment fallback. Inspect its actual command
+with `systemctl --user cat sessionbus-hub.service`, then create a drop-in with
+`systemctl --user edit sessionbus-hub.service`. Clear `ExecStart`, copy the
+installed command exactly, and append the absolute policy path. For example,
+only when this is your actual installation prefix:
+
+```ini
+[Service]
+ExecStart=
+ExecStart=%h/.local/libexec/sessionbus/hub/current/bin/sessionbus-hub --policy %h/.config/sessionbus/policy.json
+```
+
+Keep the existing listener/config environment and any arguments your installed
+command uses. Run `systemctl --user daemon-reload` and restart the user service
+to adopt the changed command. This is an experimental development setup, not a
+request to alter an existing real hub. Launchd uses its own `ProgramArguments`;
+a systemd drop-in does not apply there.

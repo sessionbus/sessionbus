@@ -105,6 +105,19 @@ func TestPolicyActualForwardClipsNamedAndUnverifiedPrivateGroups(t *testing.T) {
 	seen := make(chan IncomingCall, 8)
 	beta := connectTestDaemon(t, address, "beta", secrets["beta"], func(call IncomingCall) (Wait, error) {
 		seen <- call
+		if call.Request.Method == "session.list" {
+			decoded, err := protocol.DecodeParams("session.list", call.Request.Params)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decoded.(*protocol.SessionListRequest).SessionID == "" {
+				raw, err := protocol.EncodeResult("session.list", protocol.SessionListResult{Sessions: []protocol.SessionSummary{}, Hosts: []protocol.HostProducts{{Host: "beta", Products: []string{"fixture"}}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return immediate(Reply{Result: raw}), nil
+			}
+		}
 		if call.Request.Method == "message.send" {
 			return immediate(Reply{Result: []byte(`{"message_id":"policy-test-message","deliveries":[]}`)}), nil
 		}
@@ -140,10 +153,16 @@ func TestPolicyActualForwardClipsNamedAndUnverifiedPrivateGroups(t *testing.T) {
 	}
 	listed := policyTestForward(t, alpha, caller, policyTestRequest(t, "session.list", protocol.SessionListRequest{Host: "beta"}))
 	decoded, err := protocol.DecodeResult("session.list", listed.Result)
-	if listed.Error != nil || err != nil || len(decoded.(*protocol.SessionListResult).Sessions) != 0 || len(decoded.(*protocol.SessionListResult).Hosts) != 0 {
-		t.Fatal("hidden list fabricated a host or silence result", listed, err)
+	if listed.Error != nil || err != nil || len(decoded.(*protocol.SessionListResult).Sessions) != 0 || len(decoded.(*protocol.SessionListResult).Hosts) != 1 {
+		t.Fatal("metadata-only list lost destination inventory or exposed sessions", listed, err)
 	}
-	policyTestNotSeen(t, seen)
+	forwardedList := policyTestSeen(t, seen)
+	if len(forwardedList.From.Groups) != 1 || forwardedList.From.PrivateGroup == caller.PrivateGroup || forwardedList.From.Groups[0] != forwardedList.From.PrivateGroup {
+		t.Fatal("metadata-only list borrowed shared private visibility", forwardedList.From)
+	}
+	if hosts := decoded.(*protocol.SessionListResult).Hosts; hosts[0].Host != "beta" || !slices.Equal(hosts[0].Products, []string{"fixture"}) {
+		t.Fatal("hub changed actual destination inventory", hosts)
+	}
 	caller = policyTestCaller()
 	group := policyTestRequest(t, "message.send", protocol.MessageSendRequest{Group: "other", Host: "beta", Message: "refuse before dispatch"})
 	if reply := policyTestForward(t, alpha, caller, group); reply.Error == nil || reply.Error.Code == protocol.ForwardLost {
