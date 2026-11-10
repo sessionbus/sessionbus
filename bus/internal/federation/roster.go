@@ -120,7 +120,7 @@ func (s *hubState) roster(ctx context.Context, inbox chan<- registryEvent, origi
 			encoded, err := roster.Encode(host)
 			retainedBytes += len(encoded) + 1
 			if err != nil || retainedBytes > roster.MaxBytes-1024 {
-				postRegistry(ctx, inbox, registryEvent{kind: registryReply, reply: &originReply{origin: origin, id: id, value: errorReply(protocol.ForwardLost, "roster_too_large")}})
+				postRegistry(ctx, inbox, registryEvent{kind: registryReply, reply: &originReply{origin: origin, id: id, value: errorReply(protocol.ForwardLost, nil)}})
 				return
 			}
 			result.Hosts = append(result.Hosts, host)

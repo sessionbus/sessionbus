@@ -97,16 +97,13 @@ func validTraceDestination(value TraceDestination) bool {
 }
 
 func encodeTraceReply(reply Reply) ([]byte, error) {
-	if reply.Trace == nil || (len(reply.Result) == 0) == (reply.Error == nil) || len(reply.Trace) > MaxTraceRecipients {
+	if reply.Trace == nil || (len(reply.Result) == 0) == !hasReplyError(reply) || len(reply.Trace) > MaxTraceRecipients {
 		return nil, errFrame
 	}
 	envelope := traceReplyEnvelope{Result: reply.Result, Trace: make([]json.RawMessage, len(reply.Trace))}
-	if reply.Error != nil {
+	if hasReplyError(reply) {
 		envelope.Result = nil
-		envelope.Error = reply.ErrorRaw
-		if len(envelope.Error) == 0 {
-			envelope.Error, _ = json.Marshal(reply.Error)
-		}
+		envelope.Error = replyErrorRaw(reply)
 	}
 	seen := make(map[string]struct{}, len(reply.Trace))
 	for index, recipient := range reply.Trace {

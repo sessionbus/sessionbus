@@ -216,7 +216,7 @@ func (s *session) route(frame protocol.Frame, label string, params any) {
 
 func (s *session) describe(frame protocol.Frame, input *protocol.LaneDescribeRequest) {
 	if input.Host != "" && input.Host != s.daemon.host {
-		if input.Host != "local" {
+		if input.Host != "local" && validHost(input.Host) {
 			s.forward(frame, "describe@"+input.Host)
 			return
 		}
@@ -246,7 +246,7 @@ func (s *session) spawn(frame protocol.Frame, input *protocol.LaneSpawnRequest) 
 	caller := s.federationCaller()
 	resumeID := ""
 	if input.Host != "" && input.Host != s.daemon.host {
-		if input.Host != "local" {
+		if input.Host != "local" && validHost(input.Host) {
 			s.forward(frame, "spawn@"+input.Host)
 			return
 		}
