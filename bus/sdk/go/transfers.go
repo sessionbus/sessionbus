@@ -503,7 +503,7 @@ func (t *Transfers) handle(wire *rpc.Conn, request *rpc.Request) bool {
 	g := t.current
 	t.mu.Unlock()
 	if g == nil || g.wire != wire || !g.enabled || g.ctx.Err() != nil {
-		go func() { _ = wire.Error(request, protocol.UnsupportedOpen, "unsupported_transfer") }()
+		go func() { _ = wire.Error(request, protocol.UnsupportedTransfer, nil) }()
 		return true
 	}
 	// No filesystem, writer, credit or callback wait on the shared RPC reader.

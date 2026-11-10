@@ -327,7 +327,7 @@ func (s *session) collectFederatedList(caller federation.Caller, local federatio
 			return value
 		}
 		if hostReply.Error != nil {
-			return answer{code: hostReply.Error.Code}
+			return errorAnswer(hostReply.Error)
 		}
 		return answer{code: protocol.ForwardLost}
 	}
@@ -511,7 +511,7 @@ func collectMessageSend(messageID string, legs []messageLeg, order []string, don
 		traceRefs = append(traceRefs, value.trace[:min(remaining, len(value.trace))]...)
 		if value.code != 0 {
 			if len(leg.labels) == 0 {
-				return answer{code: value.code, trace: traceRefs}
+				return answer{code: value.code, data: value.data, trace: traceRefs}
 			}
 			for _, label := range leg.labels {
 				result.Deliveries = append(result.Deliveries, protocol.MessageSendDelivery{Target: label, Disposition: "rejected", Reason: reason(value.code, "no_receipt")})
@@ -595,8 +595,7 @@ func (d *directory) forwardLocalTrace(from federation.Caller, omit *entry, metho
 
 func rpcReply(method string, value answer) federation.Reply {
 	if value.code != 0 {
-		body, _ := protocol.ErrorBytes(1, value.code, value.data)
-		frame, _ := protocol.DecodeFrame(body[:len(body)-1])
+		frame, _ := protocol.DecodeFrame(errorBytes(1, value.code, value.data))
 		return federation.Reply{Error: frame.Error, ErrorRaw: frame.ErrorRaw}
 	}
 	raw, err := protocol.EncodeResult(method, value.value)

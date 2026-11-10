@@ -97,7 +97,11 @@ func ResultBytes(id int64, method string, value any) ([]byte, error) {
 func ErrorBytes(id int64, code int, data any) ([]byte, error) {
 	var raw json.RawMessage
 	if data != nil {
-		raw, _ = json.Marshal(data)
+		var err error
+		raw, err = json.Marshal(data)
+		if err != nil {
+			return nil, err
+		}
 	}
 	value := &RPCError{Code: code, Message: errorMessages[code], Data: raw}
 	if _, err := EncodeError(value); err != nil {

@@ -392,7 +392,7 @@ func (s *session) issue(request routedRequest) {
 		if request.runID != "" {
 			s.refuseRun(request.runID)
 		}
-		s.answerRouted(request, answer{code: protocol.Internal})
+		s.answerRouted(request, answer{code: protocol.Internal, data: "internal"})
 		return
 	}
 	queued := &request
@@ -566,7 +566,7 @@ func (s *session) reject(frame protocol.Frame, code int) {
 	}
 	s.stopping = true
 	if frame.Request && frame.ID > 0 {
-		body, _ := protocol.ErrorBytes(frame.ID, code, nil)
+		body := errorBytes(frame.ID, code, nil)
 		if s.wire.Finish(body, supersedeWriteBound) {
 			return
 		}
@@ -596,8 +596,7 @@ func (s *session) error(frame protocol.Frame, code int, data any) {
 		s.forwarded <- s.traceReply(frame.Method, answer{code: code, data: data})
 		return
 	}
-	body, err := protocol.ErrorBytes(frame.ID, code, data)
-	if err != nil || !s.wire.Send(body) {
+	if !s.wire.Send(errorBytes(frame.ID, code, data)) {
 		s.wire.Close()
 	}
 }

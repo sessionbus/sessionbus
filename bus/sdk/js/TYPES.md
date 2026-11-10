@@ -164,3 +164,9 @@ Its machine ACK confirms local resource retirement, not publication success;
 the daemon can then release its host quota and lane hold. Custom executors must
 honour cancellation and bound their own resources. Generated wire DTOs contain
 no local filesystem path fields.
+
+Transfer RPC refusals use `unsupported_transfer` (-32018) or `transfer_failed`
+(-32019), both without data; capacity remains `busy`. A refusal is not a
+publication outcome and never authorizes replay. Use the matching fixed daemon,
+kit, peer-common and codex-peer release set; earlier unreleased transfer builds
+do not decode these pairs. Existing error code/data rules remain unchanged.
