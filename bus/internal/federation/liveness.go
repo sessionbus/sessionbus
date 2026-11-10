@@ -15,12 +15,13 @@ const silenceAfter = 15 * time.Second
 
 type livenessTick struct{ at time.Time }
 
-// All fields except silent belong to this connection's existing owner loop.
-// The registry can inspect silent without taking the link owner's locks.
+// Non-atomic fields belong to the existing connection owner. The registry
+// reads silent and sets observeRoster only while relation charges exist.
 type linkLiveness struct {
-	lastReply time.Time
-	waiting   bool
-	silent    atomic.Bool
+	observeRoster atomic.Bool
+	lastReply     time.Time
+	waiting       bool
+	silent        atomic.Bool
 }
 
 func (l *linkLiveness) replied() {

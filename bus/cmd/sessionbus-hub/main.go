@@ -46,9 +46,10 @@ func runWithIO(arguments []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("sessionbus-hub", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	set.Usage = func() { writeHubHelp(stderr) }
-	listen, path := "", ""
+	listen, path, policyPath := "", "", ""
 	set.StringVar(&listen, "listen", os.Getenv("SESSIONBUS_HUB_LISTEN"), "TCP listen address")
 	set.StringVar(&path, "config", os.Getenv("SESSIONBUS_HUB_CONFIG"), "mode-0600 host secret map")
+	set.StringVar(&policyPath, "policy", "", "optional mode-0600 federation policy file")
 	if err := set.Parse(arguments); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -58,6 +59,15 @@ func runWithIO(arguments []string, stdout, stderr io.Writer) error {
 	if set.NArg() != 0 || listen == "" || path == "" {
 		return errors.New("-listen and -config are required")
 	}
+	policyConfigured := false
+	set.Visit(func(option *flag.Flag) {
+		if option.Name == "policy" {
+			policyConfigured = true
+		}
+	})
+	if policyConfigured && policyPath == "" {
+		return errors.New("-policy requires a nonempty path")
+	}
 	secrets, err := loadSecrets(path)
 	if err != nil {
 		return err
@@ -66,22 +76,45 @@ func runWithIO(arguments []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	var policy *federation.Policy
+	if policyPath != "" {
+		policy, err = federation.LoadPolicy(policyPath)
+		if err != nil {
+			return err
+		}
+	}
 	listener, err := net.Listen("tcp", listen)
 	if err != nil {
 		return err
 	}
-	hub := federation.StartHub(listener, configuration, os.Stderr)
+	hub := federation.StartHubWithPolicy(listener, configuration, stderr, policy)
+	defer hub.Close()
 	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
-	<-interrupt
-	signal.Stop(interrupt)
-	hub.Close()
+	if policyPath == "" {
+		signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
+	} else {
+		signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	}
+	defer signal.Stop(interrupt)
+	for signal := range interrupt {
+		if signal != syscall.SIGHUP {
+			return nil
+		}
+		updated, err := federation.LoadPolicy(policyPath)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			continue
+		}
+		if !hub.ReloadPolicy(updated) {
+			return nil
+		}
+	}
 	return nil
 }
 
 func writeHubHelp(output io.Writer) {
 	fmt.Fprint(output, `Usage:
-  sessionbus-hub [--listen ADDRESS] [--config FILE]
+  sessionbus-hub [--listen ADDRESS] [--config FILE] [--policy FILE]
   sessionbus-hub add-host --secret-file FILE [--config FILE] HOST
   sessionbus-hub help [add-host]
 
@@ -91,6 +124,8 @@ Commands:
 Server options:
   --listen ADDRESS  TCP address to listen on (or SESSIONBUS_HUB_LISTEN).
   --config FILE     Mode-0600 host secret map (or SESSIONBUS_HUB_CONFIG).
+  --policy FILE     Optional mode-0600 policy. SIGHUP reloads the complete file;
+                    an invalid replacement keeps the previous policy.
 
 The server requires both values. The installer defaults to :7419 and
 ${XDG_CONFIG_HOME:-$HOME/.config}/sessionbus/hub.json; direct invocations use only

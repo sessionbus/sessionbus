@@ -16,6 +16,7 @@ export interface HelloDescription {
   extra_arguments: ExtraArgument[];
 }
 export interface WorkerHello extends HelloDescription {
+  supports_policy?: boolean;
   supports_availability?: boolean;
   supports_transfer?: boolean;
   protocol: Integer;

@@ -73,10 +73,15 @@ func (s *hubState) roster(ctx context.Context, inbox chan<- registryEvent, origi
 	type leg struct {
 		host        string
 		destination *hostLink
+		policy      *Policy
 	}
 	legs := make([]leg, 0, len(names))
 	for _, host := range names {
-		legs = append(legs, leg{host, s.links[host]})
+		var policy *Policy
+		if s.policy.groupsRestricted(origin.host, host) {
+			policy = s.policy
+		}
+		legs = append(legs, leg{host: host, destination: s.links[host], policy: policy})
 	}
 	s.group.Add(1)
 	go func() {
@@ -108,6 +113,9 @@ func (s *hubState) roster(ctx context.Context, inbox chan<- registryEvent, origi
 			case <-deadline.Done():
 			case <-origin.done:
 				return
+			}
+			if leg.policy != nil {
+				host = leg.policy.projectRoster(origin.host, leg.host, host)
 			}
 			encoded, err := roster.Encode(host)
 			retainedBytes += len(encoded) + 1
