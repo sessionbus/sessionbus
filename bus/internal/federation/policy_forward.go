@@ -4,7 +4,6 @@ package federation
 
 import (
 	"context"
-	"slices"
 	"strings"
 
 	"github.com/antst/sessionbus/bus/sdk/go/protocol"
@@ -35,22 +34,30 @@ func (s *hubState) preparePolicyForward(ctx context.Context, inbox chan<- regist
 		return refusedPolicyForward(errorReply(protocol.InvalidFrame, nil))
 	}
 	var admission *policyAdmission
-	relation, traceCopy := false, false
+	relation, traceCopy, ownership := false, false, false
 	var targets []string
 	switch input := params.(type) {
 	case *protocol.LaneSpawnRequest:
+		ownership = true
 		if !policy.laneAllowed(origin.host, destination.host) {
 			return refusedPolicyForward(policyRefused())
 		}
+		if restricted && input.ResumeSessionID != "" && s.relations != nil {
+			if lane := s.relations.entries[value.From.SessionID]; lane != nil && !lane.oneWay && !s.relations.targeted(value.From.SessionID, input.ResumeSessionID) {
+				// Slash-containing leaves can collide with a nested lane's
+				// derived group. It proves access only to recorded counterparts.
+				return refusedPolicyForward(policyRefused())
+			}
+		}
 		relation = true // Only verified private groups reach owner creation.
 		if restricted {
-			_, verified, ok := s.relations.verified(value.From)
+			ownPrivate, _, ok := s.relations.verified(value.From)
 			if !ok {
 				return refusedPolicyForward(policyRefused())
 			}
 			for _, group := range input.ExtraGroups {
 				if strings.HasPrefix(group, "session:") {
-					if !slices.Contains(verified, group) {
+					if group != ownPrivate {
 						return refusedPolicyForward(policyRefused())
 					}
 				} else if !policy.groupAllowed(origin.host, destination.host, group) {
@@ -71,6 +78,7 @@ func (s *hubState) preparePolicyForward(ctx context.Context, inbox chan<- regist
 			return refusedPolicyForward(policyRefused())
 		}
 	case *protocol.TraceConfigureRequest:
+		ownership = true
 		if restricted && !s.relations.child(value.From.SessionID, input.SessionID) {
 			return refusedPolicyForward(policyRefused())
 		}
@@ -135,6 +143,11 @@ func (s *hubState) preparePolicyForward(ctx context.Context, inbox chan<- regist
 				return refusedPolicyForward(Reply{Result: raw})
 			}
 			return refusedPolicyForward(policyRefused())
+		}
+		if ownership {
+			// Ownership creation must not borrow a lane's parent's private
+			// group, even when another recorded relation could authorize it.
+			from.Groups = appendPolicyGroups(policy.namedGroups(origin.host, destination.host, from.Groups), []string{from.PrivateGroup})
 		}
 		value.From = from
 	}

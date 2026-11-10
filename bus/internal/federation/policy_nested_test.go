@@ -39,12 +39,12 @@ func TestPolicyActualNestedImmediateHostsAndVerifiedPrivateExtras(t *testing.T) 
 	}
 	policyTestSeen(t, seen)
 	child := Caller{SessionID: "child@beta", Product: "peer", Name: "Parent/child@beta", PrivateGroup: root.PrivateGroup + "/child", Groups: []string{root.PrivateGroup, root.PrivateGroup + "/child", "session:victim@gamma"}}
-	spawn = policyTestRequest(t, "lane.spawn", protocol.LaneSpawnRequest{Host: "gamma", Name: "grandchild", Product: "fixture-worker", Open: &protocol.OpenOptions{}, ExtraGroups: []string{root.PrivateGroup}})
+	spawn = policyTestRequest(t, "lane.spawn", protocol.LaneSpawnRequest{Host: "gamma", Name: "grandchild", Product: "fixture-worker", Open: &protocol.OpenOptions{}, ExtraGroups: []string{child.PrivateGroup}})
 	if reply := policyTestForward(t, beta, child, spawn); reply.Error != nil {
 		t.Fatal("valid nested immediate-host hop/private extra refused", reply.Error)
 	}
 	call := policyTestSeen(t, seen)
-	if call.From.PrivateGroup != child.PrivateGroup || !slices.Contains(call.From.Groups, root.PrivateGroup) || slices.Contains(call.From.Groups, "session:victim@gamma") {
+	if call.From.PrivateGroup != child.PrivateGroup || !slices.Equal(call.From.Groups, []string{child.PrivateGroup}) {
 		t.Fatal("nested identity lost its verified groups or gained a forged one", call.From)
 	}
 	grandchild := Caller{SessionID: "grandchild@gamma", Product: "peer", PrivateGroup: child.PrivateGroup + "/grandchild", Groups: []string{child.PrivateGroup, child.PrivateGroup + "/grandchild"}}
@@ -74,6 +74,11 @@ func TestPolicyActualNestedImmediateHostsAndVerifiedPrivateExtras(t *testing.T) 
 	forged := policyTestRequest(t, "lane.spawn", protocol.LaneSpawnRequest{Host: "gamma", Name: "forged", Product: "fixture-worker", Open: &protocol.OpenOptions{}, ExtraGroups: []string{"session:victim@gamma"}})
 	if reply := policyTestForward(t, beta, child, forged); reply.Error == nil || reply.Error.Code == protocol.ForwardLost {
 		t.Fatal("spawn extra_groups created an unverified private grant", reply)
+	}
+	policyTestNotSeen(t, seen)
+	borrowed := policyTestRequest(t, "lane.spawn", protocol.LaneSpawnRequest{Host: "gamma", Name: "borrowed", Product: "fixture-worker", Open: &protocol.OpenOptions{}, ExtraGroups: []string{root.PrivateGroup}})
+	if reply := policyTestForward(t, beta, child, borrowed); reply.Error == nil || reply.Error.Code == protocol.ForwardLost {
+		t.Fatal("ownership extra_groups borrowed the parent's private group", reply)
 	}
 	policyTestNotSeen(t, seen)
 }

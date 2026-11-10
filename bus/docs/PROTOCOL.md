@@ -1029,7 +1029,13 @@ fresh mandatory random private group for each ordinary call. Verified recorded
 creator/child relations preserve targeted access; mixed targets need a relation
 for every explicit target or use the ordinary named-group rule. Fresh spawn,
 resume and describe also require both immediate-host lane ACLs. Ownership-creating
-calls carry verified private identities rather than randomized ones. Operator
+calls carry only their own verified private identity plus allowed named groups,
+never an inherited parent private group. Internal `extra_groups` on ownership
+creation may contain only that own private group. Other relation groups cross
+only on ordinary explicit-counterpart calls. A recorded lane cannot resume
+an unrelated lane under a groups restriction, even through named groups; its
+derived private group can collide with legal slash-containing leaf names.
+Fresh nested spawn and recorded-child resume/trace remain available. Operator
 roster rows require allowed named groups; broad lists do not enumerate private-only
 children. Actual target validation and grant recording precede spawn success,
 including authoritative late completion after an earlier silence answer.

@@ -52,10 +52,17 @@ C's rules govern that call. Lane-rule changes do not interrupt existing Runs.
 A successful forwarded fresh spawn involving a configured host records a
 creator/lane relation. The hub computes its private groups from the verified
 caller and requested name. Group-restricted ownership calls accept only the
-caller's canonical own private group, or its recorded derived lane identity, and
-recorded relation groups; supplied unrelated internal groups are stripped.
+caller's canonical own private group or its recorded derived lane identity,
+plus allowed named groups. They never carry an inherited parent's private
+group, even when another relation exists. Internal `extra_groups` may name only
+that own verified private group; a borrowed parent group is refused. Recorded
+relation groups cross only on ordinary explicit-counterpart calls.
 Caller IDs containing `/` or an extra `@` in their local part cannot verify an
-own private group for these restricted calls. Unrecorded local lanes therefore
+own private group for these restricted calls. Recorded lanes cannot resume an unrelated lane, even through allowed named
+groups; a parent peer can do so. This avoids slash-name collisions between a
+local leaf and a nested lane's derived private group. Their own recorded-child
+resume/trace and fresh nested spawn remain available. No identity is rewritten
+for ownership creation. Unrecorded local lanes therefore
 use allowed named groups for ordinary federation but cannot create remote owners
 through spawn, resume or trace configuration under a groups restriction.
 
