@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"slices"
 	"sync"
 	"time"
@@ -657,6 +658,12 @@ func (s *session) forwardTransfer(frame protocol.Frame, params any, origin trans
 			response.value = value
 			if err != nil {
 				response.code, response.data = protocol.Internal, "transfer_unavailable"
+				var rpcError *protocol.RPCError
+				if frame.Method == "transfer.chunk" && errors.As(err, &rpcError) && rpcError.Code == protocol.Busy {
+					// Preserve an explicit bulk ingress refusal, without changing
+					// the uncertainty mapping for other failures or methods.
+					response.code, response.data = protocol.Busy, nil
+				}
 			}
 		}
 		reply <- response
