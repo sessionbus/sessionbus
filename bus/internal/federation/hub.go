@@ -474,7 +474,7 @@ func (l *hostLink) run(accepted bool) {
 			event.value, request = forwarded, forwarded.Request
 			target, targetErr := targetHost(request)
 			if targetErr != nil || err != nil {
-				settleForward(event, errorReply(protocol.InvalidFrame, "forwarded request exceeds the frame limit"))
+				settleForward(event, errorReply(protocol.InvalidFrame, nil))
 				continue
 			}
 			if !queueCall(l.wire, queued, pendingCall{policyEnabled: policyEnabled, policy: event.policy, forwarded: true, availability: capable, method: request.Method, reply: event.reply, trace: request.Trace, target: target}, false, func(id int64) ([]byte, error) { body, _, err := forwardRequestBytes(id, forwarded); return body, err }) {

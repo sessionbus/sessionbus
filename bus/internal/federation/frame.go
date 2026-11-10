@@ -94,13 +94,10 @@ func responseBytes(id int64, reply Reply, internal bool) ([]byte, error) {
 		// make an otherwise valid reply too large, preserve the ordinary reply.
 		return responseBytes(id, reply, false)
 	}
-	key, value := `,"result":`, reply.Result
-	if reply.Error != nil {
-		key, value = `,"error":`, reply.ErrorRaw
-		if len(value) == 0 {
-			value, _ = json.Marshal(reply.Error)
-		}
+	if hasReplyError(reply) {
+		return errorResponseBytes(id, reply), nil
 	}
+	key, value := `,"result":`, reply.Result
 	if len(value) == 0 {
 		return nil, errFrame
 	}
@@ -119,12 +116,6 @@ func rawResponseBytes(id int64, key string, value []byte) ([]byte, error) {
 }
 
 func errorReply(code int, data any) Reply {
-	message := map[int]string{protocol.Internal: "internal", protocol.Busy: "busy", protocol.UnknownSession: "unknown_session", protocol.UnsupportedOpen: "unsupported_open_field", protocol.InvalidFrame: "invalid_frame", protocol.UnknownHost: "unknown_host", protocol.ForwardLost: "forward_lost", protocol.UnsupportedTrace: "unsupported_trace", protocol.PolicyDenied: protocol.PolicyReason}[code]
-	raw, _ := json.Marshal(data)
-	if data == nil {
-		raw = nil
-	}
-	value := &protocol.RPCError{Code: code, Message: message, Data: raw}
-	errorRaw, _ := json.Marshal(value)
-	return Reply{Error: value, ErrorRaw: errorRaw}
+	frame, _ := protocol.DecodeFrame(ErrorBytes(1, code, data))
+	return Reply{Error: frame.Error, ErrorRaw: frame.ErrorRaw}
 }

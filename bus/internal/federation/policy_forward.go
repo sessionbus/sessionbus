@@ -135,7 +135,7 @@ func (s *hubState) preparePolicyForward(ctx context.Context, inbox chan<- regist
 		}
 		from, allowed, err := s.policyCaller(policy, origin.host, destination.host, value.From, relation, traceCopy)
 		if err != nil {
-			return refusedPolicyForward(errorReply(protocol.Internal, nil))
+			return refusedPolicyForward(errorReply(protocol.Internal, "internal"))
 		}
 		if !allowed {
 			if value.Request.Method == "session.list" && len(targets) == 0 {

@@ -162,7 +162,7 @@ func ServeDaemonWithTransfers(ctx context.Context, host string, fd net.Conn, inb
 			if cause != nil || targetErr != nil || err != nil || !queueCall(wire, queued, pendingCall{forwarded: true, policyEnabled: policyEnabled, availability: capable, method: request.Method, reply: event.Reply, trace: request.Trace, target: target}, false, func(id int64) ([]byte, error) { body, _, err := forwardRequestBytes(id, forwarded); return body, err }) {
 				code, data := protocol.ForwardLost, any(nil)
 				if targetErr != nil || err != nil {
-					code, data = protocol.InvalidFrame, "forwarded request exceeds the frame limit"
+					code, data = protocol.InvalidFrame, nil
 				}
 				event.Reply <- errorReply(code, data)
 				continue
