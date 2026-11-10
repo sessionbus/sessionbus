@@ -1648,7 +1648,7 @@ The admitted mapping is closed:
 | Origin operation | Destination and private request |
 | --- | --- |
 | Directed `session.list` | Explicit `host` or the last-`@` suffix of `session_id`; the destination performs its ordinary local list and visibility filter. |
-| Aggregate `session.list` | Capture `federation.hosts`; send a host-specific list to each captured host and merge with the local list. Any lost leg fails the whole call. |
+| Aggregate `session.list` | Capture `federation.hosts`; merge confirmed local and other-host rows. A lost leg contributes no sessions; a silent leg may add an opted-in not-responding stub. Explicit `session_id` lookups remain targeted and return `forward_lost`. |
 | `lane.describe` | Its explicit non-local `host`; the destination performs the ordinary local describe path. |
 | Fresh `lane.spawn` | Its explicit non-local `host`; the destination composes parent/leaf from captured `from.name` and `from.private_group`. |
 | Resume `lane.spawn` | The last-`@` suffix of canonical `resume_session_id`. |
@@ -1679,9 +1679,12 @@ run's terminal response is processed before the corresponding remote close
 response is released, matching the local lifecycle.
 
 The destination host-link owner owns its link-local ID space, pending calls,
-and cap-1 reply slots. It permits 256 unanswered forwarded calls; admission of
-the 257th closes that destination link and settles every pending or accepted
-queued call once with `forward_lost`. A reconnect is a new exact attachment and
+and cap-1 reply slots. It permits 256 queued plus unanswered ordinary calls;
+a 257th forward is refused per-call with `forward_lost`, preserving admitted
+work and the link. Mark-released correlations still hold slots until real reply
+or link end. Cleanup at that retained cap and independent writer/transport
+backpressure can still close a link; retirement settles its queued/pending
+calls once. A reconnect is a new exact attachment and
 ID space, so an old reply is never resolved through a host name into it.
 Transport loss returns `forward_lost`; no request is retried or replayed. A
 daemon reconnects with bounded backoff after dial or link loss, preserving local
@@ -1733,16 +1736,16 @@ The literal implementation layout is:
 | `bus/sdk/go/protocol` | Two optional public host selectors and retention of the complete decoded error member. |
 | `bus/cmd/sessionbus`, `bus/cmd/sessionbus-hub` | Secret/config composition only; no routing owner. |
 
-`bus/internal/conn` is reused unchanged at 94 logical production lines as the
-single bounded reader, ordered writer, outbox, and fd-close terminator. The
-daemon directory remains the sole local-row lock. Exact attachment identity,
-cap-1 reply slots, and joined helpers are retained ownership conventions, not a
-new generic router. Making the existing daemon a host-mode engine was rejected:
-duplicate-host admission keeps the incumbent rather than superseding it, host
-roster requests have no session-row analogue, the 257th forward closes a link
-rather than returning busy, and hub-link loss removes no local directory row.
-These are the measured unchanged-code reuse candidates; no host/session mode or
-callback family is introduced.
+The measured pull prototype reused `bus/internal/conn` unchanged at 94 logical
+production lines as its bounded reader, ordered writer, outbox, and fd-close
+terminator. Its host-mode-engine rejection rationale is historical: duplicate
+host admission kept the incumbent, roster requests had no session-row analogue,
+a 257th forward closed the link, and hub loss removed no local directory row.
+Current ordinary forwarding instead refuses excess calls per-call; retained
+cleanup and writer/transport loss remain the distinct closing limits described
+above. The daemon directory remains the sole local-row lock, with exact
+attachment identity, cap-1 reply slots and joined helpers; no host/session mode
+or generic callback family is introduced.
 
 The frozen replication prototype is retained only as budget evidence. On exact
 base `044de4c`, its sealed corrected patch
