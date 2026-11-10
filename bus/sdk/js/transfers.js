@@ -142,7 +142,7 @@ class Transfers {
     const g = this.current;
     // Queue callbacks off the shared reader, never filesystem work in an observer.
     void Promise.resolve().then(async () => {
-      if (!g?.enabled || g.wire !== wire || g.controller.signal.aborted) { await wire.error(request, -32008, "unsupported_transfer"); return; }
+      if (!g?.enabled || g.wire !== wire || g.controller.signal.aborted) { await wire.error(request, -32018); return; }
       try { await wire.result(request, await this._handle(g, request)); }
       catch { await wire.error(request, -32603, "endpoint_io_failed"); }
     }).catch(() => wire.close());

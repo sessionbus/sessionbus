@@ -131,7 +131,11 @@ func (d *directory) transferEndpoint(item *entry) (transfer.Endpoint, error) {
 func (s *session) transferRequest(frame protocol.Frame, params any) {
 	origin, err := s.daemon.directory.transferEndpoint(s.identity)
 	if err != nil {
-		s.error(frame, protocol.UnsupportedOpen, "unsupported_transfer")
+		code := protocol.UnsupportedTransfer
+		if !s.supportsTransfer {
+			code = protocol.UnsupportedOpen
+		}
+		s.error(frame, code, nil)
 		return
 	}
 	if s.forwardTransfer(frame, params, origin) {
@@ -145,7 +149,7 @@ func (s *session) transferRequest(frame protocol.Frame, params any) {
 		other, err = s.transferTarget(p.Target)
 	}
 	if err != nil {
-		s.error(frame, protocol.UnsupportedOpen, "unsupported_transfer")
+		s.error(frame, protocol.UnsupportedTransfer, nil)
 		return
 	}
 	reply := make(chan answer, 1)
@@ -190,13 +194,12 @@ func (s *session) transferRequest(frame protocol.Frame, params any) {
 		}
 		response := answer{value: value}
 		if err != nil {
-			response.code = protocol.Internal
-			response.data = "transfer_failed"
+			response.code = protocol.TransferFailed
 			if errors.Is(err, transfer.ErrCapacity) {
 				response.code = protocol.Busy
 			}
-			if errors.Is(err, transfer.ErrUnknown) {
-				response.code = protocol.UnknownSession
+			if errors.Is(err, transfer.ErrUnsupported) {
+				response.code = protocol.UnsupportedTransfer
 			}
 		}
 		if created != "" {

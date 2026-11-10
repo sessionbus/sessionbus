@@ -33,6 +33,11 @@ const (
 	UnsupportedTrace = -32016
 )
 
+const (
+	UnsupportedTransfer = -32018
+	TransferFailed      = -32019
+)
+
 type ExtraArgument struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`

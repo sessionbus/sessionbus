@@ -366,11 +366,13 @@
       "additionalProperties": false,
       "required": ["code", "message"],
       "properties": {
-        "code": {"enum": [-32600, -32602, -32603, -32001, -32002, -32003, -32004, -32005, -32007, -32008, -32009, -32010, -32011, -32012, -32013, -32014, -32015, -32016]},
-        "message": {"enum": ["invalid_frame", "invalid_hello", "internal", "unknown_session", "not_connected", "busy", "not_running", "already_connected", "unknown_product", "unsupported_open_field", "spawn_failed", "timeout", "not_committed", "superseded", "name_taken", "unknown_host", "forward_lost", "unsupported_trace"]},
+        "code": {"enum": [-32600, -32602, -32603, -32001, -32002, -32003, -32004, -32005, -32007, -32008, -32009, -32010, -32011, -32012, -32013, -32014, -32015, -32016, -32018, -32019]},
+        "message": {"enum": ["invalid_frame", "invalid_hello", "internal", "unknown_session", "not_connected", "busy", "not_running", "already_connected", "unknown_product", "unsupported_open_field", "spawn_failed", "timeout", "not_committed", "superseded", "name_taken", "unknown_host", "forward_lost", "unsupported_trace", "unsupported_transfer", "transfer_failed"]},
         "data": {}
       },
       "allOf": [
+        {"if": {"properties": {"code": {"const": -32018}}}, "then": {"properties": {"message": {"const": "unsupported_transfer"}}}},
+        {"if": {"properties": {"code": {"const": -32019}}}, "then": {"properties": {"message": {"const": "transfer_failed"}}}},
         {"if": {"properties": {"code": {"const": -32600}}}, "then": {"properties": {"message": {"const": "invalid_frame"}}}},
         {"if": {"properties": {"code": {"const": -32602}}}, "then": {"properties": {"message": {"const": "invalid_hello"}}}},
         {"if": {"properties": {"code": {"const": -32001}}}, "then": {"properties": {"message": {"const": "unknown_session"}}}},

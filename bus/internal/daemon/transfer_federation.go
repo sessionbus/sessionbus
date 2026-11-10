@@ -621,7 +621,7 @@ func (s *session) forwardTransfer(frame protocol.Frame, params any, origin trans
 			return false
 		}
 	} else if link == nil || !link.transfer {
-		s.error(frame, protocol.UnsupportedOpen, "unsupported_transfer")
+		s.error(frame, protocol.UnsupportedTransfer, nil)
 		return true
 	}
 	caller := s.federationCaller()

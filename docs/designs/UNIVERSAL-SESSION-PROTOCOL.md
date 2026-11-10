@@ -830,6 +830,11 @@ creation itself failed, because no child existed from which to obtain one. If an
 invalid frame has no valid request ID, the daemon cannot correlate a response
 and closes the connection without writing one.
 
+If the daemon cannot encode its own correlated error, it logs the encoding
+failure once per process and replies with `internal` (-32603), data `internal`,
+instead of disconnecting the caller. Real transport/write loss and intentional
+protocol rejection retain their existing connection cleanup.
+
 | Code | Message | Raised by |
 | ---: | --- | --- |
 | `-32600` | `invalid_frame` | Any method whose envelope, closed params, or daemon-checked identity grammar is invalid, but only when a valid request ID is recoverable. This includes a composed lane name beyond 128 characters. |
@@ -849,6 +854,8 @@ and closes the connection without writing one.
 | `-32014` | `unknown_host` | `lane.describe` or new `lane.spawn` naming an unfederated `host`, or any canonical identity input whose host part is neither local nor connected. |
 | `-32015` | `forward_lost` | A one-hop federated request whose transport ends before its response; the request may or may not have been applied on the target host and is never retried. |
 | `-32016` | `unsupported_trace` | `trace.configure` or `lane.spawn.trace` when an involved federated host or hub cannot carry or enforce tracing. Upgrade every involved daemon and hub before retrying. |
+| `-32018` | `unsupported_transfer` | `transfer.*` when a sender, target, route or SDK generation cannot take transfers; no data. A sender that did not opt into transfers receives the existing `unsupported_open_field` refusal instead. |
+| `-32019` | `transfer_failed` | `transfer.*` when the transfer ID, participant role or current state cannot admit that operation; no data. This is an operation refusal, not publication knowledge or replay authority. Capacity uses `busy` without data. |
 | `-32603` | `internal` | The daemon's own shutdown or durable row-file operation fails; `data` carries its error text. An explicit uncertain-delivery callback may also use this code; it never certifies native refusal. |
 
 ### 1.6 Negotiated endpoint-local file transfers
@@ -898,6 +905,11 @@ Unknown fields, paths, caller-supplied identities and noncanonical base64 refuse
 | `transfer.finish` | machine-only through pinned route: `{id,bytes,sha256}` | publication knowledge |
 | `transfer.fail` | source machine to coordinator: `{id,reason}` | terminal knowledge |
 | `transfer.notice` | coordinator to endpoint: strict offer/request/terminal union | `{}` |
+
+The transfer error pairs above require the matching fixed daemon, kit,
+peer-common and codex-peer release/install set. File transfer was not released
+in the a831/e752 development builds: those old transfer-capable decoders reject
+the new pairs, and no mixed-development-version negotiation is supplied.
 
 `transfer.fail.reason` is only `source_changed` or `source_read_failed`. It is
 not a tool action, arbitrary native diagnostic or generic transport-loss label.
