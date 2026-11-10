@@ -52,7 +52,7 @@ func TestAvailabilityAggregateFinalResponseKeepsAdmissionSnapshot(t *testing.T) 
 			d := &Daemon{host: "alpha"}
 			d.config.Products = []string{"peer"}
 			d.directory = newDirectory(d, nil)
-			d.federation = &federationLink{inbox: make(chan any, 1), cancel: func() {}}
+			d.federation = &federationLink{inbox: make(chan any, 2), cancel: func() {}}
 			s := pullReviewSender(d)
 			defer close(s.identity.done)
 			s.supportsAvailability = initial
