@@ -849,6 +849,7 @@ and closes the connection without writing one.
 | `-32014` | `unknown_host` | `lane.describe` or new `lane.spawn` naming an unfederated `host`, or any canonical identity input whose host part is neither local nor connected. |
 | `-32015` | `forward_lost` | A one-hop federated request whose transport ends before its response; the request may or may not have been applied on the target host and is never retried. |
 | `-32016` | `unsupported_trace` | `trace.configure` or `lane.spawn.trace` when an involved federated host or hub cannot carry or enforce tracing. Upgrade every involved daemon and hub before retrying. |
+| `-32017` | `federation_policy_denied` | Hub group or lane policy refused admission; only for policy-capable kits and hops. Older recipients get `unknown_session`. |
 | `-32603` | `internal` | The daemon's own shutdown or durable row-file operation fails; `data` carries its error text. An explicit uncertain-delivery callback may also use this code; it never certifies native refusal. |
 
 ### 1.6 Negotiated endpoint-local file transfers
@@ -1024,6 +1025,55 @@ or prevent the other setter from being attempted. Other platforms keep explicit
 keepalive with an observable unsupported drop-time option. A stuck worker behind
 a responsive host, and application silence while the transport makes progress,
 remain separate from transport retirement.
+
+### 1.8 Optional hub policy
+
+The optional mode-0600 `--policy` JSON file independently limits each host's
+named federation groups, remote lane destinations (`lanes_to`) and permitted
+remote lane sources (`lanes_on`). Missing dimensions remain unrestricted; an
+empty array denies that dimension. Invalid startup configuration fails closed.
+SIGHUP validates and atomically reloads the whole file, retaining the previous
+policy on failure without closing links. Unconfigured host pairs bypass policy
+rewriting, relation tracking and refusals.
+
+For a groups-restricted pair, the hub forwards allowed named groups only, plus a
+fresh mandatory random private group for each ordinary call. Verified recorded
+creator/child relations preserve targeted access; mixed targets need a relation
+for every explicit target or use the ordinary named-group rule. Fresh spawn,
+resume and describe also require both immediate-host lane ACLs. Ownership-creating
+calls carry only their own verified private identity plus allowed named groups,
+never an inherited parent private group. Internal `extra_groups` on ownership
+creation may contain only that own private group. Other relation groups cross
+only on ordinary explicit-counterpart calls. A recorded lane cannot resume
+an unrelated lane under a groups restriction, even through named groups; its
+derived private group can collide with legal slash-containing leaf names.
+Fresh nested spawn and recorded-child resume/trace remain available. Operator
+roster rows require allowed named groups; broad lists do not enumerate private-only
+children. Actual target validation and grant recording precede spawn success,
+including authoritative late completion after an earlier silence answer.
+
+The transient relation table is capped at 256 live plus in-flight grants per
+destination, retains close entries, and removes exact-generation forgets or
+complete fresh current-attachment roster absences. It is empty at hub start.
+Private-only successful resume may prove deliberate access (creator or explicit
+extra-group grantee) and reconstruct directed caller-to-lane access for all
+known-ID operations, with no derived identity, reverse notice/trace or transfer
+grant. Named-present resume adds no grant; existing entries are reused unchanged.
+Transfers check actual bound identities/groups with their captured policy once,
+before adoption/bytes, using their existing pending reservation.
+
+The distinct `policy/1` hello capability requires `info.sessionbus_policy:1`, or
+Worker `supports_policy:true` on a daemon-issued `sbt1:av1:fp1:` token. New hello
+capabilities are returned only when declared. `sessionbus-policy/1` is the ALPN
+superset of availability, transfer, wake, trace and roster; every older hop strips
+the request-local policy bit. The new `-32017` message and delivery reason token
+`federation_policy_denied` reaches only opted-in requests over supporting hops.
+Others receive existing `unknown_session`, including raw-backed errors and trace
+envelopes. Arbitrary existing delivery reasons remain valid. Copied trace-owner
+and transfer-caller identities never carry this request-local bit. An old daemon
+may expose an unknown kit Info key as ordinary metadata; an old hub does not
+enforce policy. See `bus/docs/FEDERATION-POLICY.md` for the operator contract and
+accepted identity, restart, partial-list and relation limits.
 
 ## 2. Daemon
 

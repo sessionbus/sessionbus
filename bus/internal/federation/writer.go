@@ -3,6 +3,7 @@ package federation
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/antst/sessionbus/bus/internal/conn"
 	"github.com/antst/sessionbus/bus/sdk/go/protocol"
@@ -10,6 +11,15 @@ import (
 
 func queueCall(wire *conn.Conn, queued map[*pendingCall]bool, call pendingCall, bulk bool, encode func(int64) ([]byte, error), stream ...string) bool {
 	p := &call
+	if p.probe != nil && p.method == rosterMethod && p.probe.observeRoster.Load() {
+		build := encode
+		encode = func(id int64) ([]byte, error) {
+			body, err := build(id)
+			// Published by Conn.Dispatched before the owner copies this call.
+			p.selectedAt = time.Now()
+			return body, err
+		}
+	}
 	var accepted bool
 	if p.probe != nil {
 		accepted = wire.ProbeRequest(p, encode)
@@ -33,8 +43,22 @@ func installCall(d conn.Dispatched, queued map[*pendingCall]bool, pending map[in
 func settleQueuedCalls(queued map[*pendingCall]bool) {
 	for p := range queued {
 		delete(queued, p)
-		notifyCall(p, errorReply(protocol.ForwardLost, nil))
+		settleCall(p, errorReply(protocol.ForwardLost, nil))
 	}
+}
+
+// Marking silence uses notifyCall, not this authoritative completion path.
+func settleCall(call *pendingCall, reply Reply) {
+	if call.policy != nil {
+		call.policy.report(reply, call.reply != nil)
+		call.reply = nil
+		return
+	}
+	notifyCall(call, reply)
+}
+
+func settleForward(call outgoingForward, reply Reply) {
+	settleCall(&pendingCall{policy: call.policy, reply: call.reply}, reply)
 }
 
 func queueTransferCall(wire *conn.Conn, queued map[*pendingCall]bool, pending map[int64]pendingCall, event TransferCall) bool {
@@ -81,13 +105,15 @@ func queueTransferCall(wire *conn.Conn, queued map[*pendingCall]bool, pending ma
 		var fields struct {
 			From struct {
 				Availability json.RawMessage `json:"availability"`
+				Policy       json.RawMessage `json:"policy"`
 			} `json:"from"`
 		}
 		if json.Unmarshal(raw, &fields) != nil {
 			return false
 		}
-		if fields.From.Availability != nil {
+		if fields.From.Availability != nil || fields.From.Policy != nil {
 			from.Availability = false
+			from.Policy = false
 			raw, err = json.Marshal(params)
 			if err != nil {
 				return false

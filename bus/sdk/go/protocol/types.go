@@ -31,6 +31,7 @@ const (
 	UnknownHost      = -32014
 	ForwardLost      = -32015
 	UnsupportedTrace = -32016
+	PolicyDenied     = -32017
 )
 
 type ExtraArgument struct {
@@ -59,6 +60,7 @@ type HelloDescription struct {
 }
 
 type WorkerHello struct {
+	SupportsPolicy       bool    `json:"supports_policy,omitempty"`
 	SupportsAvailability bool    `json:"supports_availability,omitempty"`
 	SupportsTransfer     bool    `json:"supports_transfer,omitempty"`
 	Protocol             Integer `json:"protocol"`

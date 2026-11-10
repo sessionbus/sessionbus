@@ -214,7 +214,7 @@ func (s *session) federationCaller() federation.Caller {
 	if s.identity.lifetime != nil {
 		token = s.identity.lifetime.token
 	}
-	return federation.Caller{Availability: s.supportsAvailability, OwnerLifetime: token, SessionID: s.identity.row.SessionID, Name: s.identity.row.Name,
+	return federation.Caller{Policy: s.supportsPolicy, Availability: s.supportsAvailability, OwnerLifetime: token, SessionID: s.identity.row.SessionID, Name: s.identity.row.Name,
 		Product: s.identity.row.Product, PrivateGroup: privateGroup(s.identity), Groups: append([]string(nil), s.identity.row.Groups...)}
 }
 
@@ -239,7 +239,7 @@ func (s *session) forward(frame protocol.Frame, targetID string) {
 		s.error(frame, code, nil)
 		return
 	}
-	s.requests[frame.ID] = &requestState{frame: frame, targetID: targetID, availability: caller.Availability}
+	s.requests[frame.ID] = &requestState{frame: frame, targetID: targetID, availability: caller.Availability, policy: caller.Policy}
 	if frame.Method == "session.list" {
 		s.requests[frame.ID].selfInfo = listSelfInfo(caller)
 	}
@@ -296,7 +296,7 @@ func (s *session) listFederated(frame protocol.Frame) bool {
 	}
 	caller, lifetime := s.federationCaller(), s.identity.done
 	local := s.daemon.directory.forwardLocal(caller, s.identity, "session.list", &protocol.SessionListRequest{Host: s.daemon.host}, "")
-	s.requests[frame.ID] = &requestState{frame: frame, availability: caller.Availability}
+	s.requests[frame.ID] = &requestState{frame: frame, availability: caller.Availability, policy: caller.Policy}
 	s.owned++
 	go func() {
 		value := s.collectFederatedList(caller, local, hosts, lifetime)
@@ -474,7 +474,7 @@ func (s *session) sendFederated(frame protocol.Frame, input *protocol.MessageSen
 
 func (s *session) startWork(frame protocol.Frame, work func(<-chan struct{}) answer) {
 	lifetime := s.identity.done
-	s.requests[frame.ID] = &requestState{frame: frame, aggregate: true}
+	s.requests[frame.ID] = &requestState{frame: frame, aggregate: true, policy: s.federationCaller().Policy}
 	s.owned++
 	go func() { s.inbox <- replyEvent{requestID: frame.ID, answer: work(lifetime)} }()
 }

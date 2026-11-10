@@ -62,7 +62,7 @@ func TestLateRepliesDrainOnBothOwnersAndDoNotReachSuccessor(t *testing.T) {
 				if side == "hub" {
 					err = (&hostLink{}).frame(event, pending, &last)
 				} else {
-					err = daemonFrame("beta", false, false, false, event, pending, nil, nil, nil, &helpers, &last, nil)
+					err = daemonFrame("beta", false, false, false, false, event, pending, nil, nil, nil, &helpers, &last, nil)
 				}
 				if err != nil {
 					t.Fatal("late response closed owner", err)
@@ -122,7 +122,7 @@ func TestInvalidLateReplyIsStillAProtocolFailure(t *testing.T) {
 			if side == "hub" {
 				err = (&hostLink{}).frame(event, pending, &last)
 			} else {
-				err = daemonFrame("beta", false, false, false, event, pending, nil, nil, nil, &helpers, &last, nil)
+				err = daemonFrame("beta", false, false, false, false, event, pending, nil, nil, nil, &helpers, &last, nil)
 			}
 			if err == nil || len(pending) != 1 {
 				t.Fatal("abandonment disabled frame validation", err, len(pending))

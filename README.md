@@ -167,7 +167,7 @@ ownership tokens, and it does not register an observer peer.
 The operator socket is mode 0600 inside the current user's mode-0700 runtime
 directory. This is same-user diagnostic access; ordinary `session.list` calls
 remain group-restricted. Authenticated federation hosts are trusted to request
-each other's operator metadata. `roster --socket PATH` selects the daemon using
+each other's operator metadata unless an optional hub group policy filters it. `roster --socket PATH` selects the daemon using
 its **public** socket path; the operator endpoint is derived automatically.
 
 `--json` emits `sessionbus.roster.v1`. Unavailable remote metadata is marked
@@ -386,6 +386,12 @@ connection fail without replay; a lost message receipt is reported as
 Worker ownership ends with the lost connection and is not restored by reconnect.
 Use `sessionbus roster --local` to inspect local peers during a hub outage;
 the default roster reports incomplete federation until recovery.
+
+The hub can restrict federation groups and remote lane execution with an optional
+mode-0600 `--policy FILE`. Missing rules preserve existing behavior; empty lists
+deny that dimension. SIGHUP atomically reloads a valid replacement without a
+restart. Local host access remains unchanged. See the [policy contract](bus/docs/FEDERATION-POLICY.md)
+for examples, creator/access-grant lifetime, rollout and limits.
 
 The host installer waits at most ten seconds for an authenticated local list response.
 Hub installation reports service activation only; inspect the service status/logs

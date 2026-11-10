@@ -28,6 +28,7 @@ type Hub struct {
 }
 
 type Registry struct {
+	policy *Policy
 	ctx    context.Context
 	cancel context.CancelFunc
 	inbox  chan registryEvent
@@ -48,19 +49,25 @@ const (
 	registryOwnerEnd
 	registryRoster
 	registryTransferCreate
+	registryPolicy
+	registryPolicyComplete
+	registryPolicyRoster
 )
 
 type registryEvent struct {
-	transfer *connTransferFrame
-	ownerEnd *incomingOwnerEnd
-	kind     registryEventKind
-	link     *hostLink
-	fd       net.Conn
-	tls      *tls.Config
-	forward  *incomingForward
-	reply    *originReply
-	id       int64
-	ack      chan bool
+	completion  *policyCompletion
+	observation *policyRosterObservation
+	policy      *Policy
+	transfer    *connTransferFrame
+	ownerEnd    *incomingOwnerEnd
+	kind        registryEventKind
+	link        *hostLink
+	fd          net.Conn
+	tls         *tls.Config
+	forward     *incomingForward
+	reply       *originReply
+	id          int64
+	ack         chan bool
 }
 
 type hostLink struct {
@@ -81,6 +88,8 @@ type hostLink struct {
 }
 
 type hubState struct {
+	policy    *Policy
+	relations *policyRelations
 	transfers *hubTransfers
 	links     map[string]*hostLink
 	sockets   map[net.Conn]bool
@@ -89,8 +98,9 @@ type hubState struct {
 }
 
 type outgoingForward struct {
-	value Forward
-	reply chan Reply
+	value  Forward
+	reply  chan Reply
+	policy *policyAdmission
 }
 
 type incomingForward struct {
@@ -100,18 +110,24 @@ type incomingForward struct {
 }
 
 type originReply struct {
-	method       string
-	availability bool
-	release      func()
-	origin       *hostLink
-	destination  *hostLink
-	id           int64
-	value        Reply
-	collect      bool
+	policy        *policyReplyScope
+	method        string
+	availability  bool
+	policyEnabled bool
+	release       func()
+	origin        *hostLink
+	destination   *hostLink
+	id            int64
+	value         Reply
+	collect       bool
 }
 
 func StartHub(listener net.Listener, configuration *tls.Config, stderr io.Writer) *Hub {
-	h := &Hub{listener: listener, tls: configuration, registry: NewRegistry(stderr), accepted: make(chan struct{})}
+	return StartHubWithPolicy(listener, configuration, stderr, nil)
+}
+
+func StartHubWithPolicy(listener net.Listener, configuration *tls.Config, stderr io.Writer, policy *Policy) *Hub {
+	h := &Hub{listener: listener, tls: configuration, registry: NewRegistryWithPolicy(stderr, policy), accepted: make(chan struct{})}
 	go h.accept()
 	return h
 }
@@ -133,10 +149,33 @@ func (h *Hub) Close() {
 }
 
 func NewRegistry(stderr io.Writer) *Registry {
+	return NewRegistryWithPolicy(stderr, nil)
+}
+
+func NewRegistryWithPolicy(stderr io.Writer, policy *Policy) *Registry {
 	ctx, cancel := context.WithCancel(context.Background())
-	r := &Registry{ctx: ctx, cancel: cancel, inbox: make(chan registryEvent, conn.OutboxSize), done: make(chan struct{}), log: stderr}
+	r := &Registry{policy: policy, ctx: ctx, cancel: cancel, inbox: make(chan registryEvent, conn.OutboxSize), done: make(chan struct{}), log: stderr}
 	go r.run()
 	return r
+}
+
+// ReloadPolicy installs one already-validated immutable snapshot in the same
+// serialized order as forwarded call admission. It never restarts links.
+func (h *Hub) ReloadPolicy(policy *Policy) bool {
+	return h.registry.ReloadPolicy(policy)
+}
+
+func (r *Registry) ReloadPolicy(policy *Policy) bool {
+	ack := make(chan bool, 1)
+	if !postRegistry(r.ctx, r.inbox, registryEvent{kind: registryPolicy, policy: policy, ack: ack}) {
+		return false
+	}
+	select {
+	case <-ack:
+		return true
+	case <-r.ctx.Done():
+		return false
+	}
 }
 
 func (r *Registry) Accept(fd net.Conn, configuration *tls.Config) bool {
@@ -160,7 +199,7 @@ func (r *Registry) Close() {
 }
 
 func (r *Registry) run() {
-	state := hubState{transfers: newHubTransfers(r.ctx), links: map[string]*hostLink{}, sockets: map[net.Conn]bool{}, log: r.log}
+	state := hubState{policy: r.policy, transfers: newHubTransfers(r.ctx), links: map[string]*hostLink{}, sockets: map[net.Conn]bool{}, log: r.log}
 	defer close(r.done)
 	for {
 		select {
@@ -181,6 +220,13 @@ func (r *Registry) run() {
 
 func (s *hubState) handle(ctx context.Context, inbox chan<- registryEvent, event registryEvent) {
 	switch event.kind {
+	case registryPolicy:
+		s.policy = event.policy
+		event.ack <- true
+	case registryPolicyComplete:
+		s.completePolicy(*event.completion)
+	case registryPolicyRoster:
+		s.observePolicyRoster(event.link, *event.observation)
 	case registryAccept:
 		s.sockets[event.fd] = true
 		s.group.Add(1)
@@ -193,6 +239,7 @@ func (s *hubState) handle(ctx context.Context, inbox chan<- registryEvent, event
 		accepted := s.links[event.link.host] == nil
 		if accepted {
 			s.links[event.link.host] = event.link
+			s.policyRosterFlag(event.link.host)
 			if s.transfers == nil {
 				s.transfers = newHubTransfers(ctx)
 			}
@@ -241,6 +288,24 @@ func (s *hubState) handle(ctx context.Context, inbox chan<- registryEvent, event
 			return
 		}
 		origin, destination := event.link, s.links[targetHost]
+		if s.policy.groupsRestricted(sourceHost, targetHost) {
+			// Charge before retaining relationship references or launching binds.
+			reservation, err := s.transfers.reserveCreate(origin, destination, *input)
+			if err != nil {
+				if !s.transfers.reply(origin, frame, nil, err) {
+					s.remove(origin)
+				}
+				return
+			}
+			policy := &policyTransfer{policy: s.policy, sourceHost: sourceHost, targetHost: targetHost, sourceID: input.From.SessionID, relations: s.relations.transferSnapshot(input.From.SessionID, targetHost)}
+			go func() {
+				value, err := s.transfers.createReserved(origin, destination, *input, reservation, policy)
+				if !s.transfers.reply(origin, frame, value, err) {
+					origin.wire.Close()
+				}
+			}()
+			return
+		}
 		go func() {
 			value, err := s.transfers.create(origin, destination, *input)
 			if !s.transfers.reply(origin, frame, value, err) {
@@ -381,18 +446,20 @@ func (l *hostLink) run(accepted bool) {
 			request := event.value.Request
 			capable := event.value.From.Availability && SupportsAvailability(l.fd)
 			event.value.From.Availability = capable
+			policyEnabled := event.value.From.Policy && SupportsPolicy(l.fd)
+			event.value.From.Policy = policyEnabled
 			if l.liveness.silent.Load() {
 				p := pendingCall{method: request.Method, availability: capable}
 				p.target, _ = targetHost(request)
-				event.reply <- silenceReply(&p)
+				settleForward(event, silenceReply(&p))
 				continue
 			}
 			if request.Completion && !SupportsWake(l.fd) {
-				event.reply <- errorReply(protocol.ForwardLost, nil)
+				settleForward(event, errorReply(protocol.ForwardLost, nil))
 				continue
 			}
 			if requestRequiresTrace(request) && !SupportsTrace(l.fd) {
-				event.reply <- traceUnsupported()
+				settleForward(event, traceUnsupported())
 				continue
 			}
 			if request.Trace && !SupportsTrace(l.fd) {
@@ -400,18 +467,18 @@ func (l *hostLink) run(accepted bool) {
 				event.value.Request = request
 			}
 			if failed || callCount(pending, queued, false) >= maxPendingForwardedPerHost {
-				event.reply <- errorReply(protocol.ForwardLost, nil)
+				settleForward(event, errorReply(protocol.ForwardLost, nil))
 				continue
 			}
 			_, forwarded, err := forwardRequestBytes(1, event.value)
 			event.value, request = forwarded, forwarded.Request
 			target, targetErr := targetHost(request)
 			if targetErr != nil || err != nil {
-				event.reply <- errorReply(protocol.InvalidFrame, "forwarded request exceeds the frame limit")
+				settleForward(event, errorReply(protocol.InvalidFrame, "forwarded request exceeds the frame limit"))
 				continue
 			}
-			if !queueCall(l.wire, queued, pendingCall{forwarded: true, availability: capable, method: request.Method, reply: event.reply, trace: request.Trace, target: target}, false, func(id int64) ([]byte, error) { body, _, err := forwardRequestBytes(id, forwarded); return body, err }) {
-				event.reply <- errorReply(protocol.ForwardLost, nil)
+			if !queueCall(l.wire, queued, pendingCall{policyEnabled: policyEnabled, policy: event.policy, forwarded: true, availability: capable, method: request.Method, reply: event.reply, trace: request.Trace, target: target}, false, func(id int64) ([]byte, error) { body, _, err := forwardRequestBytes(id, forwarded); return body, err }) {
+				settleForward(event, errorReply(protocol.ForwardLost, nil))
 				continue
 			}
 		case originReply:
@@ -457,7 +524,7 @@ func (l *hostLink) settleQueued() {
 			case outgoingRoster:
 				call.reply <- errorReply(protocol.ForwardLost, nil)
 			case outgoingForward:
-				call.reply <- errorReply(protocol.ForwardLost, nil)
+				settleForward(call, errorReply(protocol.ForwardLost, nil))
 			case TransferCall:
 				call.Reply <- errorReply(protocol.ForwardLost, nil)
 			case lifetimeCall:
@@ -491,8 +558,11 @@ func (l *hostLink) frame(event conn.Frame, pending map[int64]pendingCall, lastIn
 		delete(pending, frame.ID)
 		if call.probe != nil {
 			call.probe.replied()
+			if call.method == rosterMethod && l.liveness.observeRoster.Load() && reply.Error == nil {
+				postRegistry(l.ctx, l.registry, registryEvent{kind: registryPolicyRoster, link: l, observation: &policyRosterObservation{selected: call.selectedAt, reply: reply}})
+			}
 		}
-		notifyCall(&call, reply)
+		settleCall(&call, reply)
 		return nil
 	}
 	if !event.Ordered && frame.ID <= *lastIn {
@@ -544,7 +614,7 @@ func (l *hostLink) frame(event conn.Frame, pending map[int64]pendingCall, lastIn
 		return errFrame
 	}
 	value, host, err := decodeForward(frame.Params, l.host)
-	if err == nil && value.From.Availability && !SupportsAvailability(l.fd) {
+	if err == nil && (value.From.Availability && !SupportsAvailability(l.fd) || value.From.Policy && !SupportsPolicy(l.fd)) {
 		return errFrame
 	}
 	if err == nil && value.From.SourceAttachment != "" {
@@ -559,7 +629,7 @@ func (l *hostLink) frame(event conn.Frame, pending map[int64]pendingCall, lastIn
 func settlePending(pending map[int64]pendingCall) {
 	for id, call := range pending {
 		delete(pending, id)
-		notifyCall(&call, errorReply(protocol.ForwardLost, nil))
+		settleCall(&call, errorReply(protocol.ForwardLost, nil))
 	}
 }
 
@@ -616,9 +686,10 @@ func (s *hubState) forward(ctx context.Context, inbox chan<- registryEvent, orig
 		return
 	}
 	availability := call.value.From.Availability && SupportsAvailability(origin.fd)
+	policyEnabled := call.value.From.Policy && SupportsPolicy(origin.fd)
 	if destination.liveness.silent.Load() {
 		p := pendingCall{method: call.value.Request.Method, target: call.host, availability: availability}
-		s.reply(originReply{origin: origin, id: call.id, value: silenceReply(&p), method: call.value.Request.Method, availability: availability})
+		s.reply(originReply{origin: origin, id: call.id, value: silenceReply(&p), method: call.value.Request.Method, availability: availability, policyEnabled: policyEnabled})
 		return
 	}
 	if call.value.Request.Completion && !SupportsWake(destination.fd) {
@@ -633,11 +704,24 @@ func (s *hubState) forward(ctx context.Context, inbox chan<- registryEvent, orig
 	if collect && !SupportsTrace(destination.fd) {
 		call.value.Request.Trace = false
 	}
+	reply := make(chan Reply, 1)
+	policy := s.preparePolicyForward(ctx, inbox, origin, destination, &call.value, reply)
+	if policy.refusal != nil {
+		s.reply(originReply{origin: origin, id: call.id, value: *policy.refusal, method: call.value.Request.Method, availability: availability, policyEnabled: policyEnabled})
+		return
+	}
 	call.value.From.SourceAttachment = origin.attachment
 	call.value.From.Availability = availability && SupportsAvailability(destination.fd)
-	reply := make(chan Reply, 1)
-	if !destination.wire.Post(outgoingForward{call.value, reply}) {
-		reply <- errorReply(protocol.ForwardLost, nil)
+	call.value.From.Policy = policyEnabled && SupportsPolicy(destination.fd)
+	if !destination.wire.Post(outgoingForward{value: call.value, reply: reply, policy: policy.admission}) {
+		lost := errorReply(protocol.ForwardLost, nil)
+		if policy.admission != nil {
+			// We are already the registry owner. A failed Post proves no
+			// destination admission, so settle inline without a self-inbox wait.
+			s.completePolicy(policyCompletion{admission: policy.admission, reply: lost, deliver: true})
+		} else {
+			reply <- lost
+		}
 	}
 	s.group.Add(1)
 	go func() {
@@ -647,7 +731,7 @@ func (s *hubState) forward(ctx context.Context, inbox chan<- registryEvent, orig
 			if value.Unavailable && call.value.Request.Method == "session.list" {
 				value = unavailableList(call.host, availability)
 			}
-			postRegistry(ctx, inbox, registryEvent{kind: registryReply, reply: &originReply{origin: origin, destination: destination, id: call.id, value: value, collect: collect, method: call.value.Request.Method, availability: availability}})
+			postRegistry(ctx, inbox, registryEvent{kind: registryReply, reply: &originReply{origin: origin, destination: destination, policy: policy.reply, id: call.id, value: value, collect: collect, method: call.value.Request.Method, availability: availability, policyEnabled: policyEnabled}})
 		case <-origin.done:
 		case <-ctx.Done():
 		}
@@ -655,7 +739,9 @@ func (s *hubState) forward(ctx context.Context, inbox chan<- registryEvent, orig
 }
 
 func (s *hubState) reply(event originReply) {
+	event.value = event.policy.project(event.method, event.value)
 	event.value = ProjectAvailability(event.method, event.value, event.availability && SupportsAvailability(event.origin.fd))
+	event.value = ProjectPolicy(event.method, event.value, event.policyEnabled && SupportsPolicy(event.origin.fd))
 	if event.collect {
 		if event.value.Trace == nil {
 			event.value.Trace = []TraceRecipient{}
