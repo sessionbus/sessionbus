@@ -16,6 +16,9 @@ import (
 var ErrUnknown = errors.New("unknown_transfer")
 var ErrRole = errors.New("transfer_role_mismatch")
 var ErrState = errors.New("transfer_state_mismatch")
+
+// ErrStartUnconfirmed means an allocated source start has no confirmed reply.
+var ErrStartUnconfirmed = errors.New("source_start_unconfirmed")
 var ErrUnsupported = errors.New("unsupported_transfer")
 
 // Endpoint is an authenticated attachment, never an endpoint-supplied sender
@@ -433,7 +436,7 @@ func (e *Engine) prepareAccepted(r *record, p protocol.TransferAccept) (protocol
 		// Arbitrate against a concurrent authoritative terminal under the same
 		// gate. A genuinely unconfirmed start still fails without replay.
 		r.finishTerminalLocked(protocol.TransferTerminal{ID: p.ID, Outcome: "unknown", Bytes: protocol.Integer(r.bytes), Reason: "source_start_unconfirmed"})
-		return protocol.TransferDescriptor{}, ErrState
+		return protocol.TransferDescriptor{}, ErrStartUnconfirmed
 	}
 	return result, nil
 }

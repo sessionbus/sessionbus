@@ -195,6 +195,9 @@ func (s *session) transferRequest(frame protocol.Frame, params any) {
 		response := answer{value: value}
 		if err != nil {
 			response.code = protocol.TransferFailed
+			if errors.Is(err, transfer.ErrStartUnconfirmed) {
+				response.code, response.data = protocol.Internal, "transfer_unavailable"
+			}
 			if (frame.Method == "transfer.offer" || frame.Method == "transfer.request") && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 				// Create checks coordinator cancellation before allocating an ID.
 				response.code, response.data = protocol.Internal, "transfer_unavailable"
