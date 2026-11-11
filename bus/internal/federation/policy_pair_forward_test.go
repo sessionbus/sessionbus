@@ -52,7 +52,8 @@ func TestPolicyActualSourcePairIsolationAndBusy(t *testing.T) {
 		}
 	}
 	// Exercise the real roster fanout deterministically, without waiting for
-	// the periodic probe interval. Incomplete replies must not prune the cap.
+	// the periodic probe interval. This checks fixture fanout; the selection
+	// test separately checks policy probe observation and pruning.
 	probe := make(chan Reply, 1)
 	alpha.inbox <- RosterCall{Reply: probe}
 	select {

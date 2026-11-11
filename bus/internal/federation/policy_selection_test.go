@@ -27,7 +27,7 @@ func (c *policyWriteBarrier) Write(body []byte) (int, error) {
 }
 
 func TestPolicyProbeSelectionStampPublishesBeforeReplyAndPruning(t *testing.T) {
-	for _, mode := range []string{"observed", "queued-before-tracking", "selected-before-entry", "untracked"} {
+	for _, mode := range []string{"observed", "queued-before-tracking", "selected-before-entry", "untracked", "incomplete"} {
 		t.Run(mode, func(t *testing.T) {
 			left, right := net.Pipe()
 			barrier := &policyWriteBarrier{Conn: left, entered: make(chan struct{})}
@@ -37,7 +37,7 @@ func TestPolicyProbeSelectionStampPublishesBeforeReplyAndPruning(t *testing.T) {
 			t.Cleanup(func() { wire.Close(); _ = right.Close(); workers.Wait() })
 			registry := make(chan registryEvent, 1)
 			link := &hostLink{host: "beta", ctx: context.Background(), wire: wire, registry: registry}
-			if mode == "observed" || mode == "selected-before-entry" {
+			if mode == "observed" || mode == "selected-before-entry" || mode == "incomplete" {
 				link.liveness.observeRoster.Store(true)
 			}
 			body, _ := ResponseBytes(100, emptyReply())
@@ -89,9 +89,13 @@ func TestPolicyProbeSelectionStampPublishesBeforeReplyAndPruning(t *testing.T) {
 			if mode != "untracked" {
 				state.relations.entries[entry.lane], state.relations.charges[policyPair{"alpha", "beta"}] = entry, 1
 			}
-			response := RosterReply(roster.Host{Host: "beta", Products: []string{}, Sessions: []roster.Row{}})
+			host := roster.Host{Host: "beta", Products: []string{}, Sessions: []roster.Row{}}
+			if mode == "incomplete" {
+				host.Error = "host_roster_unavailable"
+			}
+			response := RosterReply(host)
 			if _, err := decodeRosterReply(response.Result); response.Error != nil || err != nil {
-				t.Fatal("invalid complete-roster fixture", err)
+				t.Fatal("invalid roster fixture", err)
 			}
 			body, _ = ResponseBytes(frame.ID, response)
 			if _, err := right.Write(body); err != nil {
@@ -117,10 +121,13 @@ func TestPolicyProbeSelectionStampPublishesBeforeReplyAndPruning(t *testing.T) {
 				return
 			}
 			event := <-registry
-			if mode == "observed" && !event.observation.selected.After(recorded) {
+			if (mode == "observed" || mode == "incomplete") && !event.observation.selected.After(recorded) {
 				t.Fatal("selection stamp was not published through Dispatched")
 			}
 			state.handle(context.Background(), registry, event)
+			if mode == "incomplete" && (state.relations.entries[entry.lane] != entry || state.relations.charges[policyPair{"alpha", "beta"}] != 1 || !link.liveness.observeRoster.Load()) {
+				t.Fatal("fresh incomplete observation changed the relation, charge or tracking")
+			}
 			if removed := state.relations.entries[entry.lane] == nil; removed != (mode == "observed") {
 				t.Fatal("stale/unknown selection pruned, or fresh complete absence did not prune", mode, event.observation.selected, recorded)
 			}

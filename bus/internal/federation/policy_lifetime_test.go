@@ -124,11 +124,42 @@ func TestPolicyActualRelationCapCountsLiveAndInFlightAndForgetReleases(t *testin
 		}, nil
 	})
 	_ = callHosts(t, beta)
-	alpha := connectTestDaemon(t, address, "alpha", secrets["alpha"], func(IncomingCall) (Wait, error) { return immediate(emptyReply()), nil })
+	alpha := connectTestDaemon(t, address, "alpha", secrets["alpha"], func(call IncomingCall) (Wait, error) {
+		if IsRoster(call) {
+			return immediate(errorReply(protocol.ForwardLost, nil)), nil // Not complete absence.
+		}
+		return immediate(emptyReply()), nil
+	})
 	_ = callHosts(t, alpha)
 	caller := policyTestCaller()
 	request := func(name string) PublicRequest {
 		return policyTestRequest(t, "lane.spawn", protocol.LaneSpawnRequest{Host: "beta", Name: name, Product: "fixture-worker", Open: &protocol.OpenOptions{}})
+	}
+	// Probe alpha through the real roster fanout before any spawn. An invalid
+	// roster must not close the source link midway through this cap test.
+	probe := make(chan Reply, 1)
+	beta.inbox <- RosterCall{Reply: probe}
+	select {
+	case reply := <-probe:
+		remote, err := decodeRosterReply(reply.Result)
+		if reply.Error != nil || err != nil || len(remote.Hosts) != 1 || remote.Hosts[0].Host != "alpha" || remote.Hosts[0].Error != "host_roster_unavailable" || len(remote.Hosts[0].Sessions) != 0 {
+			t.Fatal("incomplete source roster was not retained", reply, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("source roster fanout did not return")
+	}
+	if hosts := callHosts(t, beta); len(hosts) != 1 || hosts[0] != "alpha" {
+		select {
+		case <-alpha.closed:
+			t.Fatal("source link closed after its invalid roster response", hosts)
+		case <-time.After(time.Second):
+			t.Fatal("source disappeared without an observed closed link", hosts)
+		}
+	}
+	select {
+	case <-alpha.closed:
+		t.Fatal("source link closed after incomplete roster")
+	default:
 	}
 	for i := 0; i < policyRelationsPerPair-2; i++ {
 		name := fmt.Sprintf("child%d", i)
