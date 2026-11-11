@@ -86,10 +86,25 @@ func TestGroupEnumerationFailureCollectsAlreadyStartedLocalDelivery(t *testing.T
 	if len(result.Deliveries) != 2 {
 		t.Fatal(result)
 	}
+	written, rejected := 0, 0
 	for _, delivery := range result.Deliveries {
-		if delivery.Disposition == "rejected" && (delivery.Target != "team" || delivery.Reason != "no_receipt" || delivery.SessionID != "" || delivery.DeliveryID != "") {
-			t.Fatal("enumeration invented remote identity", delivery)
+		switch delivery.Disposition {
+		case "written":
+			written++
+			if delivery.Target != "recipient@alpha" || delivery.SessionID != "recipient@alpha" || delivery.DeliveryID != "delivery-alpha" || delivery.Reason != "" {
+				t.Fatal("enumeration lost the exact local receipt", delivery)
+			}
+		case "rejected":
+			rejected++
+			if delivery.Target != "team" || delivery.Reason != "no_receipt" || delivery.SessionID != "" || delivery.DeliveryID != "" {
+				t.Fatal("enumeration invented remote identity", delivery)
+			}
+		default:
+			t.Fatal("unexpected enumeration delivery disposition", delivery)
 		}
+	}
+	if written != 1 || rejected != 1 {
+		t.Fatal("enumeration did not retain one local receipt and one refusal", result)
 	}
 	if _, err := protocol.EncodeResult("message.send", result); err != nil {
 		t.Fatal(err)
