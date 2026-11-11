@@ -118,7 +118,7 @@ func (e *Engine) create(creator, other Endpoint, offer bool, name, what string, 
 		}
 		select {
 		case <-p.Done:
-			return protocol.TransferDescriptor{}, ErrUnsupported
+			return protocol.TransferDescriptor{}, context.Canceled
 		default:
 		}
 	}
