@@ -3,6 +3,8 @@
 package federation
 
 import (
+	"fmt"
+	"io"
 	"sync/atomic"
 	"time"
 
@@ -24,14 +26,16 @@ type linkLiveness struct {
 	silent        atomic.Bool
 }
 
-func (l *linkLiveness) replied() {
+func (l *linkLiveness) replied() bool {
 	l.lastReply = time.Now()
 	l.waiting = false
-	l.silent.Store(false)
+	return l.silent.Swap(false)
 }
 
-func (l *linkLiveness) tick(now time.Time, method string, wire *conn.Conn, queued map[*pendingCall]bool, pending map[int64]pendingCall) {
+func (l *linkLiveness) tick(now time.Time, method string, wire *conn.Conn, queued map[*pendingCall]bool, pending map[int64]pendingCall) bool {
+	marked := false
 	if now.Sub(l.lastReply) >= silenceAfter && !l.silent.Swap(true) {
+		marked = true
 		for p := range queued {
 			if p.forwarded {
 				notifyCall(p, silenceReply(p))
@@ -47,10 +51,26 @@ func (l *linkLiveness) tick(now time.Time, method string, wire *conn.Conn, queue
 	if !l.waiting && queueCall(wire, queued, pendingCall{method: method, probe: l}, false, func(id int64) ([]byte, error) { return requestBytes(id, method, struct{}{}) }) {
 		l.waiting = true // Includes queued, selected, written and late response.
 	}
+	return marked
+}
+
+func exactSessionLookup(request PublicRequest) bool {
+	if request.Method != "session.list" {
+		return false
+	}
+	var input protocol.SessionListRequest
+	return protocol.DecodeJSON(request.Params, &input) == nil && input.SessionID != ""
+}
+
+func logLinkTransition(output io.Writer, host, state string, at time.Time) {
+	if output == nil {
+		return
+	}
+	fmt.Fprintf(output, "federation host=%q state=%s time=%s\n", host, state, at.UTC().Format(time.RFC3339Nano))
 }
 
 func silenceReply(p *pendingCall) Reply {
-	if p.method == "session.list" {
+	if p.method == "session.list" && !p.lookup {
 		return unavailableList(p.target, p.availability)
 	}
 	return errorReply(protocol.ForwardLost, nil)
@@ -62,4 +82,11 @@ func notifyCall(p *pendingCall, reply Reply) {
 		p.reply <- reply
 		p.reply = nil
 	}
+}
+
+func logDaemonTransition(output io.Writer, host, state string, at time.Time) {
+	if output == nil {
+		return
+	}
+	fmt.Fprintf(output, "federation host=%q peer=hub state=%s time=%s\n", host, state, at.UTC().Format(time.RFC3339Nano))
 }

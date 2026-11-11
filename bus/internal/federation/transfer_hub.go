@@ -57,7 +57,7 @@ func (l *hostLink) transferCall(ctx context.Context, method string, params, resu
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-l.done:
-			return transfer.ErrUnsupported
+			return context.Canceled
 		}
 	} else {
 		select {
@@ -65,7 +65,7 @@ func (l *hostLink) transferCall(ctx context.Context, method string, params, resu
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-l.done:
-			return transfer.ErrUnsupported
+			return context.Canceled
 		}
 	}
 	select {
@@ -77,7 +77,7 @@ func (l *hostLink) transferCall(ctx context.Context, method string, params, resu
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-l.done:
-		return transfer.ErrUnsupported
+		return context.Canceled
 	}
 }
 func (h *hubTransfers) bind(ctx context.Context, link *hostLink, input TransferBind) (*hubTransferBinding, error) {
@@ -118,7 +118,7 @@ func (b *hubTransferBinding) endpoint() transfer.Endpoint {
 	ep.Call = func(ctx context.Context, method string, params, result any) error {
 		select {
 		case <-b.ctx.Done():
-			return transfer.ErrUnsupported
+			return context.Canceled
 		default:
 		}
 		if method == "transfer.prepare" {
@@ -363,22 +363,7 @@ type connTransferFrame struct {
 func (h *hubTransfers) reply(link *hostLink, frame connTransferFrame, value any, err error) bool {
 	reply := transferReply(value, err)
 	event := originReply{id: frame.value.ID, value: reply, origin: link, destination: link, release: frame.release}
-	select {
-	case <-link.done:
-	case <-h.ctx.Done():
-	default:
-		// This can run on that inbox's own owner or the registry. Never wait
-		// for capacity from either loop; the caller applies normal overload close.
-		select {
-		case link.inbox <- event:
-			return true
-		default:
-		}
-	}
-	if frame.release != nil {
-		frame.release()
-	}
-	return false
+	return link.postOriginReply(event)
 }
 
 func (b *hubTransferBinding) retire() {

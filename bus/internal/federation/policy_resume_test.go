@@ -28,7 +28,7 @@ func TestPolicyPrivateResumeOneWayAdmissionAndBoundaries(t *testing.T) {
 			if mode == "existing" {
 				s.relations = newPolicyRelations()
 				s.relations.entries["child@beta"] = &policyRelation{lane: "child@beta", creator: "another@alpha", private: "session:another@alpha/child", parentPrivate: "session:another@alpha"}
-				s.relations.charges["beta"] = 1
+				s.relations.charges[policyPair{"alpha", "beta"}] = 1
 			}
 			answer := make(chan Reply, 1)
 			value := Forward{From: caller, Request: policyTestRequest(t, "lane.spawn", protocol.LaneSpawnRequest{ResumeSessionID: "child@beta"})}
@@ -50,12 +50,12 @@ func TestPolicyPrivateResumeOneWayAdmissionAndBoundaries(t *testing.T) {
 			if (a.kind == policyResumeAccess) != proof {
 				t.Fatal("wrong proof eligibility", a.kind)
 			}
-			if proof && s.relations.charges["beta"] != 1 {
+			if proof && s.relations.charges[policyPair{"alpha", "beta"}] != 1 {
 				t.Fatal("proof dispatched before charged slot")
 			}
 			if mode == "duplicate" {
 				s.relations.entries["child@beta"] = &policyRelation{lane: "child@beta", creator: "other@alpha"}
-				s.relations.charges["beta"]++
+				s.relations.charges[policyPair{"alpha", "beta"}]++
 			}
 			result := relationResult("child@beta")
 			if mode == "foreign" {
@@ -89,7 +89,7 @@ func TestPolicyPrivateResumeOneWayAdmissionAndBoundaries(t *testing.T) {
 				t.Fatal("late success answered twice")
 			}
 			if failed {
-				if mode != "duplicate" && s.relations.charges["beta"] != 0 {
+				if mode != "duplicate" && s.relations.charges[policyPair{"alpha", "beta"}] != 0 {
 					t.Fatal("failed proof leaked slot")
 				}
 				return
@@ -110,7 +110,7 @@ func TestPolicyPrivateResumeOneWayAdmissionAndBoundaries(t *testing.T) {
 			if _, _, ok := s.relations.verified(Caller{SessionID: entry.lane, PrivateGroup: caller.PrivateGroup + "/child"}); ok {
 				t.Fatal("guessed derived identity verified")
 			}
-			if _, again := s.relations.complete(a, result, true); again || s.relations.charges["beta"] != 1 {
+			if _, again := s.relations.complete(a, result, true); again || s.relations.charges[policyPair{"alpha", "beta"}] != 1 {
 				t.Fatal("duplicate completion changed charge")
 			}
 		})
@@ -127,6 +127,19 @@ func TestPolicyOneWayAllExplicitTargetsAndNoEnumeration(t *testing.T) {
 		seen <- call
 		if call.Request.Method == "lane.spawn" {
 			return immediate(relationResult("child@beta")), nil
+		}
+		if call.Request.Method == "session.list" {
+			decoded, err := protocol.DecodeParams("session.list", call.Request.Params)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decoded.(*protocol.SessionListRequest).SessionID == "" {
+				raw, err := protocol.EncodeResult("session.list", protocol.SessionListResult{Sessions: []protocol.SessionSummary{}, Hosts: []protocol.HostProducts{{Host: "beta", Products: []string{"fixture"}}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return immediate(Reply{Result: raw}), nil
+			}
 		}
 		return immediate(errorReply(protocol.Busy, nil)), nil
 	})
@@ -178,31 +191,38 @@ func TestPolicyOneWayAllExplicitTargetsAndNoEnumeration(t *testing.T) {
 	if err != nil || len(decoded.(*protocol.SessionListResult).Sessions) != 0 {
 		t.Fatal("broad list enumerated private child", broad, err)
 	}
-	policyTestNotSeen(t, seen)
+	forwarded := policyTestSeen(t, seen)
+	if len(forwarded.From.Groups) != 1 || forwarded.From.PrivateGroup == caller.PrivateGroup || forwarded.From.Groups[0] != forwarded.From.PrivateGroup {
+		t.Fatal("broad metadata borrowed directed relation", forwarded.From)
+	}
+	listed := decoded.(*protocol.SessionListResult)
+	if len(listed.Hosts) != 1 || listed.Hosts[0].Host != "beta" || len(listed.Hosts[0].Products) != 1 || listed.Hosts[0].Products[0] != "fixture" {
+		t.Fatal("broad list lost destination inventory", listed.Hosts)
+	}
 }
 
 func TestPolicyOneWayUsesSameLiveAndInflightCap(t *testing.T) {
 	r := newPolicyRelations()
 	link := &hostLink{host: "beta"}
-	for range policyRelationsPerHost - 1 {
-		if !r.admit(&policyAdmission{kind: policyFresh, destination: link}) {
+	for range policyRelationsPerPair - 1 {
+		if !r.admit(&policyAdmission{kind: policyFresh, destination: link, creator: "parent@alpha"}) {
 			t.Fatal("early cap")
 		}
 	}
 	a := &policyAdmission{kind: policyResumeAccess, destination: link, creator: "access@alpha", private: "session:access@alpha", id: "lane@beta"}
-	if !r.admit(a) || r.charges["beta"] != policyRelationsPerHost {
+	if !r.admit(a) || r.charges[policyPair{"alpha", "beta"}] != policyRelationsPerPair {
 		t.Fatal("resume not charged with inflight spawns")
 	}
-	if r.admit(&policyAdmission{kind: policyResumeAccess, destination: link}) || r.admit(&policyAdmission{kind: policyFresh, destination: link}) {
+	if r.admit(&policyAdmission{kind: policyResumeAccess, destination: link, creator: "parent@alpha"}) || r.admit(&policyAdmission{kind: policyFresh, destination: link, creator: "parent@alpha"}) {
 		t.Fatal("live/inflight shared cap bypass")
 	}
-	if got, once := r.complete(a, errorReply(protocol.ForwardLost, nil), true); !once || got.Error == nil || r.charges["beta"] != policyRelationsPerHost-1 {
+	if got, once := r.complete(a, errorReply(protocol.ForwardLost, nil), true); !once || got.Error == nil || r.charges[policyPair{"alpha", "beta"}] != policyRelationsPerPair-1 {
 		t.Fatal("failed proof charge not released")
 	}
-	if _, again := r.complete(a, errorReply(protocol.ForwardLost, nil), true); again || r.charges["beta"] != policyRelationsPerHost-1 {
+	if _, again := r.complete(a, errorReply(protocol.ForwardLost, nil), true); again || r.charges[policyPair{"alpha", "beta"}] != policyRelationsPerPair-1 {
 		t.Fatal("failed proof released twice")
 	}
-	if !r.admit(&policyAdmission{kind: policyResumeAccess, destination: link}) {
+	if !r.admit(&policyAdmission{kind: policyResumeAccess, destination: link, creator: "parent@alpha"}) {
 		t.Fatal("released slot not reusable")
 	}
 }

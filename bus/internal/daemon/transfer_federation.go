@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"slices"
 	"sync"
 	"time"
@@ -74,7 +73,7 @@ func (b *transferBridge) call(ctx context.Context, method string, params, result
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-b.ctx.Done():
-			return transfer.ErrUnsupported
+			return context.Canceled
 		}
 	} else {
 		select {
@@ -82,7 +81,7 @@ func (b *transferBridge) call(ctx context.Context, method string, params, result
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-b.ctx.Done():
-			return transfer.ErrUnsupported
+			return context.Canceled
 		}
 	}
 	select {
@@ -94,7 +93,7 @@ func (b *transferBridge) call(ctx context.Context, method string, params, result
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-b.ctx.Done():
-		return transfer.ErrUnsupported
+		return context.Canceled
 	}
 }
 func (b *transferBridge) bind(ctx context.Context, p federation.TransferBind) (federation.TransferBound, error) {
@@ -132,7 +131,7 @@ func (b *transferBridge) bind(ctx context.Context, p federation.TransferBind) (f
 		b.mu.Unlock()
 		cancel()
 		reservation.Release()
-		return federation.TransferBound{}, transfer.ErrUnsupported
+		return federation.TransferBound{}, context.Canceled
 	}
 	b.tokens[token] = entry
 	entry.timer = time.AfterFunc(10*time.Minute, func() {
@@ -634,6 +633,7 @@ func (s *session) forwardTransfer(frame protocol.Frame, params any, origin trans
 		if target != "" {
 			var created federation.TransferCreated
 			err := link.bridge.call(link.bridge.ctx, federation.TransferCreateMethod, federation.TransferCreate{From: caller, Generation: origin.Key, Target: canonicalID, Kind: kind, Name: name, What: what}, &created)
+			createdRemotely := err == nil
 			if err == nil {
 				var binding *bridgeBinding
 				binding, err = link.bridge.lookupToken(created.OriginBinding)
@@ -646,6 +646,9 @@ func (s *session) forwardTransfer(frame protocol.Frame, params any, origin trans
 			}
 			if err != nil {
 				response.code, response.data = protocol.Internal, "transfer_unavailable"
+				if !createdRemotely {
+					response.code, response.data = federation.TransferError(err)
+				}
 			} else {
 				response.value = created.Transfer
 				response.after = func() {
@@ -657,13 +660,7 @@ func (s *session) forwardTransfer(frame protocol.Frame, params any, origin trans
 			value, err := link.bridge.forward(link.bridge.ctx, origin.Key, frame.Method, params)
 			response.value = value
 			if err != nil {
-				response.code, response.data = protocol.Internal, "transfer_unavailable"
-				var rpcError *protocol.RPCError
-				if frame.Method == "transfer.chunk" && errors.As(err, &rpcError) && rpcError.Code == protocol.Busy {
-					// Preserve an explicit bulk ingress refusal, without changing
-					// the uncertainty mapping for other failures or methods.
-					response.code, response.data = protocol.Busy, nil
-				}
+				response.code, response.data = federation.TransferError(err)
 			}
 		}
 		reply <- response

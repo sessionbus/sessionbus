@@ -19,15 +19,19 @@ type policyForward struct {
 // the policy and the minimal metadata belonging to an admitted correlation.
 func (s *hubState) preparePolicyForward(ctx context.Context, inbox chan<- registryEvent, origin, destination *hostLink, value *Forward, answer chan Reply) policyForward {
 	policy := s.policy
+	result := policyForward{}
+	if value.Request.Trace && policy != nil {
+		result.reply = &policyReplyScope{policy: policy, source: origin.host, target: destination.host}
+	}
 	tracked := policy.tracks(origin.host, destination.host)
 	restricted := policy.groupsRestricted(origin.host, destination.host)
 	// A forget can retire a retained grant after its original rule was removed.
-	retainedForget := value.Request.Method == "session.close" && s.relations != nil && s.relations.charges[destination.host] != 0
+	retainedForget := value.Request.Method == "session.close" && s.relations.chargedDestination(destination.host)
 	if !tracked && !retainedForget {
-		return policyForward{}
+		return result
 	}
 	if !restricted && !retainedForget && value.Request.Method != "lane.spawn" && value.Request.Method != "lane.describe" {
-		return policyForward{}
+		return result
 	}
 	params, err := protocol.DecodeParams(value.Request.Method, value.Request.Params)
 	if err != nil {
@@ -138,11 +142,17 @@ func (s *hubState) preparePolicyForward(ctx context.Context, inbox chan<- regist
 			return refusedPolicyForward(errorReply(protocol.Internal, "internal"))
 		}
 		if !allowed {
-			if value.Request.Method == "session.list" && len(targets) == 0 {
+			if value.Request.Method != "session.list" || len(targets) != 0 {
+				return refusedPolicyForward(policyRefused())
+			}
+			if !policy.laneAllowed(origin.host, destination.host) {
 				raw, _ := protocol.EncodeResult("session.list", protocol.SessionListResult{Sessions: []protocol.SessionSummary{}})
 				return refusedPolicyForward(Reply{Result: raw})
 			}
-			return refusedPolicyForward(policyRefused())
+			from, err = maskedPolicyCaller(value.From, nil)
+			if err != nil {
+				return refusedPolicyForward(errorReply(protocol.Internal, "internal"))
+			}
 		}
 		if ownership {
 			// Ownership creation must not borrow a lane's parent's private
@@ -166,11 +176,11 @@ func (s *hubState) preparePolicyForward(ctx context.Context, inbox chan<- regist
 		admission.ctx, admission.registry = ctx, inbox
 		admission.destination, admission.reply = destination, answer
 		if !s.relations.admit(admission) {
-			return refusedPolicyForward(policyRefused())
+			return refusedPolicyForward(errorReply(protocol.Busy, nil))
 		}
 		s.policyRosterFlag(destination.host)
 	}
-	result := policyForward{admission: admission}
+	result.admission = admission
 	if restricted && value.Request.Method == "session.list" {
 		result.reply = &policyReplyScope{policy: policy, source: origin.host, target: destination.host}
 	}

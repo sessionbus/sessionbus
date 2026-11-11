@@ -39,6 +39,7 @@ type pendingCall struct {
 	policy         *policyAdmission
 	selectedAt     time.Time
 	forwarded      bool
+	lookup         bool
 	availability   bool
 	policyEnabled  bool
 	probe          *linkLiveness
@@ -112,7 +113,9 @@ func ServeDaemonWithTransfers(ctx context.Context, host string, fd net.Conn, inb
 		switch event := raw.(type) {
 		case livenessTick:
 			if cause == nil {
-				liveness.tick(event.at, hostsMethod, wire, queued, pending)
+				if liveness.tick(event.at, hostsMethod, wire, queued, pending) {
+					logDaemonTransition(stderr, host, "not_responding", event.at)
+				}
 			}
 		case TransferCall:
 			if cause != nil || !SupportsTransfer(fd) || !queueTransferCall(wire, queued, pending, event) {
@@ -136,7 +139,7 @@ func ServeDaemonWithTransfers(ctx context.Context, host string, fd net.Conn, inb
 			event.Value.From.Policy = policyEnabled
 			if liveness.silent.Load() {
 				target, _ := targetHost(event.Value.Request)
-				event.Reply <- silenceReply(&pendingCall{method: event.Value.Request.Method, target: target, availability: capable})
+				event.Reply <- silenceReply(&pendingCall{lookup: exactSessionLookup(event.Value.Request), method: event.Value.Request.Method, target: target, availability: capable})
 				continue
 			}
 			if callCount(pending, queued, false) >= protocol.MaxOperations {
@@ -159,7 +162,7 @@ func ServeDaemonWithTransfers(ctx context.Context, host string, fd net.Conn, inb
 			_, forwarded, err := forwardRequestBytes(1, event.Value)
 			event.Value, request = forwarded, forwarded.Request
 			target, targetErr := targetHost(request)
-			if cause != nil || targetErr != nil || err != nil || !queueCall(wire, queued, pendingCall{forwarded: true, policyEnabled: policyEnabled, availability: capable, method: request.Method, reply: event.Reply, trace: request.Trace, target: target}, false, func(id int64) ([]byte, error) { body, _, err := forwardRequestBytes(id, forwarded); return body, err }) {
+			if cause != nil || targetErr != nil || err != nil || !queueCall(wire, queued, pendingCall{lookup: exactSessionLookup(event.Value.Request), forwarded: true, policyEnabled: policyEnabled, availability: capable, method: request.Method, reply: event.Reply, trace: request.Trace, target: target}, false, func(id int64) ([]byte, error) { body, _, err := forwardRequestBytes(id, forwarded); return body, err }) {
 				code, data := protocol.ForwardLost, any(nil)
 				if targetErr != nil || err != nil {
 					code, data = protocol.InvalidFrame, nil
@@ -240,7 +243,7 @@ func ServeDaemonWithTransfers(ctx context.Context, host string, fd net.Conn, inb
 				continue
 			}
 			if cause == nil {
-				cause = daemonFrame(host, traceCapable, wakeCapable, SupportsAvailability(fd), SupportsPolicy(fd), event, pending, wire, inbox, admit, &helpers, &lastIn, lifetime)
+				cause = daemonFrame(host, traceCapable, wakeCapable, SupportsAvailability(fd), SupportsPolicy(fd), event, pending, wire, inbox, admit, &helpers, &lastIn, lifetime, stderr)
 				if cause != nil {
 					fmt.Fprintln(stderr, cause)
 					wire.Close()
@@ -258,7 +261,7 @@ func ServeDaemonWithTransfers(ctx context.Context, host string, fd net.Conn, inb
 	}
 }
 
-func daemonFrame(host string, traceCapable, wakeCapable, availabilityCapable, policyCapable bool, event conn.Frame, pending map[int64]pendingCall, wire *conn.Conn, inbox chan any, admit func(IncomingCall) (Wait, error), helpers *sync.WaitGroup, lastIn *int64, lifetime []func(LifetimeEvent)) error {
+func daemonFrame(host string, traceCapable, wakeCapable, availabilityCapable, policyCapable bool, event conn.Frame, pending map[int64]pendingCall, wire *conn.Conn, inbox chan any, admit func(IncomingCall) (Wait, error), helpers *sync.WaitGroup, lastIn *int64, lifetime []func(LifetimeEvent), logs ...io.Writer) error {
 	frame := event.Value
 	if event.Err != nil {
 		return event.Err
@@ -274,9 +277,16 @@ func daemonFrame(host string, traceCapable, wakeCapable, availabilityCapable, po
 		}
 		delete(pending, frame.ID)
 		if call.probe != nil {
-			call.probe.replied()
+			if call.probe.replied() && len(logs) != 0 {
+				logDaemonTransition(logs[0], host, "responding", call.probe.lastReply)
+			}
 		}
 		notifyCall(&call, ProjectPolicy(call.method, ProjectAvailability(call.method, reply, call.availability), call.policyEnabled))
+		if call.method == ownerEndMethod && reply.Error != nil {
+			// This reply has no consumer. Fail closed rather than lose the
+			// lifetime end while leaving remote parent-owned work alive.
+			return reply.Error
+		}
 		return nil
 	}
 	if !event.Ordered && frame.ID <= *lastIn {

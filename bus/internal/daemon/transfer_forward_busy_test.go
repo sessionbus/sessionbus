@@ -22,12 +22,23 @@ func TestForwardTransferChunkPreservesReceivedBusy(t *testing.T) {
 	}{
 		{"chunk-busy", "transfer.chunk", protocol.Busy, protocol.Busy},
 		{"chunk-success", "transfer.chunk", 0, 0},
+		{"create-allocated-missing", "transfer.offer", 0, protocol.Internal},
+		{"create-allocated-role", "transfer.offer", 0, protocol.Internal},
+		{"create-allocated-state", "transfer.offer", 0, protocol.Internal},
 		{"chunk-internal", "transfer.chunk", protocol.Internal, protocol.Internal},
 		{"chunk-forward-lost", "transfer.chunk", protocol.ForwardLost, protocol.Internal},
-		{"status-busy", "transfer.status", protocol.Busy, protocol.Internal},
-		{"finish-busy", "transfer.finish", protocol.Busy, protocol.Internal},
-		{"create-busy", "transfer.offer", protocol.Busy, protocol.Internal},
+		{"status-busy", "transfer.status", protocol.Busy, protocol.Busy},
+		{"finish-busy", "transfer.finish", protocol.Busy, protocol.Busy},
+		{"create-busy", "transfer.offer", protocol.Busy, protocol.Busy},
 		{"chunk-cancelled", "transfer.chunk", -1, protocol.Internal},
+		{"chunk-unsupported", "transfer.chunk", protocol.UnsupportedTransfer, protocol.UnsupportedTransfer},
+		{"chunk-failed", "transfer.chunk", protocol.TransferFailed, protocol.TransferFailed},
+		{"status-unsupported", "transfer.status", protocol.UnsupportedTransfer, protocol.UnsupportedTransfer},
+		{"status-failed", "transfer.status", protocol.TransferFailed, protocol.TransferFailed},
+		{"finish-unsupported", "transfer.finish", protocol.UnsupportedTransfer, protocol.UnsupportedTransfer},
+		{"finish-failed", "transfer.finish", protocol.TransferFailed, protocol.TransferFailed},
+		{"offer-unsupported", "transfer.offer", protocol.UnsupportedTransfer, protocol.UnsupportedTransfer},
+		{"offer-failed", "transfer.offer", protocol.TransferFailed, protocol.TransferFailed},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			d, s, peer := reviewSession(t)
@@ -89,7 +100,20 @@ func TestForwardTransferChunkPreservesReceivedBusy(t *testing.T) {
 					t.Fatal("wrong bridge method", call.Method)
 				}
 				var reply []byte
-				if test.remoteCode == 0 {
+				if test.remoteCode == 0 && test.method == "transfer.offer" {
+					descriptor := protocol.TransferDescriptor{ID: "allocated", Sender: item.row.SessionID, Receiver: "destination@remote", Name: "file", CreatedBy: item.row.SessionID, State: "offered"}
+					if _, err := protocol.EncodeResult("transfer.offer", descriptor); err != nil {
+						t.Fatal("invalid success fixture", err)
+					}
+					token := "origin-binding"
+					switch test.name {
+					case "create-allocated-role":
+						bridge.tokens = map[string]*bridgeBinding{token: {endpoint: transfer.Endpoint{Key: "wrong-generation"}}}
+					case "create-allocated-state":
+						bridge.tokens = map[string]*bridgeBinding{token: {endpoint: origin, id: "different-id"}}
+					}
+					reply, err = json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 9, "result": federation.TransferCreated{Transfer: descriptor, OriginBinding: token}})
+				} else if test.remoteCode == 0 {
 					reply, err = protocol.ResultBytes(9, test.method, protocol.TransferCredit{Offset: 1})
 				} else {
 					var data any
@@ -133,7 +157,7 @@ func TestForwardTransferChunkPreservesReceivedBusy(t *testing.T) {
 				}
 			} else if frame.Error == nil || frame.Error.Code != test.wantCode {
 				t.Errorf("forwarded %s = %s, want code %d", test.name, response, test.wantCode)
-			} else if test.wantCode == protocol.Busy && (frame.Error.Message != "busy" || len(frame.Error.Data) != 0) {
+			} else if (test.wantCode == protocol.Busy || test.wantCode == protocol.UnsupportedTransfer || test.wantCode == protocol.TransferFailed) && len(frame.Error.Data) != 0 {
 				t.Errorf("Busy carried changed message/data: %s", response)
 			} else if test.wantCode == protocol.Internal && string(frame.Error.Data) != `"transfer_unavailable"` {
 				t.Errorf("uncertain error mapping changed: %s", response)

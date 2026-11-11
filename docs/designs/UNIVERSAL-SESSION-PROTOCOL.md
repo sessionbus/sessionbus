@@ -816,8 +816,8 @@ rechecks it at publication. Same-ID supersession needs no extra control frame.
 Control queue/write failure closes the link instead of dropping cleanup.
 Destination hub loss ends all remote nonpersistent owners. Persistent lanes
 ignore owner loss and retain their independent auto-close deadlines. This is
-connectivity-lifetime policy, not proof of remote process death; no lease,
-polling, replay or reconnect subsystem is added.
+connectivity-lifetime policy, not proof of remote process death. Existing
+attachment probes and reconnect do not replay operations or recover old owners.
 
 ### 1.5 Error authority
 
@@ -831,8 +831,10 @@ invalid frame has no valid request ID, the daemon cannot correlate a response
 and closes the connection without writing one.
 
 If the daemon cannot encode its own correlated error, it logs the encoding
-failure once per process and replies with `internal` (-32603), data `internal`,
-instead of disconnecting the caller. Real transport/write loss and intentional
+failure once per distinct supported protocol code, plus one shared bucket for
+unknown codes, and replies with `internal` (-32603), data `internal`,
+instead of disconnecting the caller. The log names the original code (the first actual value for the unknown bucket)
+and never logs error-data payloads. Real transport/write loss and intentional
 protocol rejection retain their existing connection cleanup.
 
 | Code | Message | Raised by |
@@ -841,7 +843,7 @@ protocol rejection retain their existing connection cleanup.
 | `-32602` | `invalid_hello` | `session.hello` when its union, protocol, identity, or token is invalid. |
 | `-32001` | `unknown_session` | `message.send`, resume `lane.spawn`, run start/read/wait/ack, `turn.interrupt`, or `session.close` when no eligible target exists, the target is invisible, or a control name has several eligible matches. Active commands do not resolve archived IDs or names. |
 | `-32002` | `not_connected` | A selected-active connection is lost before dispatch or during a pending call; it is not an initial archived-target lookup result. |
-| `-32003` | `busy` | Run admission when the target already has an outstanding run or 256 retained records; out-of-order ack; a cursor read after close admission; a worker loop dequeuing a 257th unanswered call; a full 256-event connection inbox; or a new run, interrupt, close, resume, or forget for a claimed lane row. A delivery rejected by either bound has reason `busy`; delivery to a claimed but attached lane is still admitted. |
+| `-32003` | `busy` | Run admission when the target already has an outstanding run or 256 retained records; out-of-order ack; a cursor read after close admission; a worker loop dequeuing a 257th unanswered call; a full 256-event connection inbox; a full 256-grant source/destination policy pair; transfer or hub reply-capacity refusal; or a new run, interrupt, close, resume, or forget for a claimed lane row. A delivery rejected by either bound has reason `busy`; delivery to a claimed but attached lane is still admitted. |
 | `-32004` | `not_running` | `turn.interrupt` when the target has no outstanding run; or an ordinary worker delivery refused before any native admission at a finished turn boundary, for daemon hold/reseed. |
 | `-32005` | `already_connected` | Resume `lane.spawn` when the durable row already has its worker connection. |
 | `-32007` | `unknown_product` | `lane.describe` or new `lane.spawn` when the product token is invalid or its binary is absent from the target host's service PATH. |
@@ -852,7 +854,7 @@ protocol rejection retain their existing connection cleanup.
 | `-32012` | `superseded` | Any request from a peer connection displaced by exact directory replacement. |
 | `-32013` | `name_taken` | Historical name-reservation error retained in the published vocabulary; the current daemon does not emit it. |
 | `-32014` | `unknown_host` | `lane.describe` or new `lane.spawn` naming an unfederated `host`, or any canonical identity input whose host part is neither local nor connected. |
-| `-32015` | `forward_lost` | A one-hop federated request whose transport ends before its response; the request may or may not have been applied on the target host and is never retried. |
+| `-32015` | `forward_lost` | A targeted one-hop call whose transport ends, destination is marked not responding, or forwarding capacity refuses it. An explicit `session.list.session_id` lookup uses this error too. Broad/host-only lists keep partial projection and message sends keep per-leg receipts. The request may or may not have been applied and is never retried. |
 | `-32016` | `unsupported_trace` | `trace.configure` or `lane.spawn.trace` when an involved federated host or hub cannot carry or enforce tracing. Upgrade every involved daemon and hub before retrying. |
 | `-32017` | `federation_policy_denied` | Hub group or lane policy refused admission; only for policy-capable kits and hops. Older recipients get `unknown_session`. |
 | `-32018` | `unsupported_transfer` | `transfer.*` when a sender, target, route or SDK generation cannot take transfers; no data. A sender that did not opt into transfers receives the existing `unsupported_open_field` refusal instead. |
@@ -874,6 +876,19 @@ A new daemon returns `{capabilities:["transfer/1"]}` only to an opting-in
 endpoint. An old daemon returns `{}`; ordinary operations remain available and
 transfer operations refuse locally. Non-opting endpoints continue to receive
 the legacy empty hello result. The reserved bit negotiates transport only.
+
+Transfer refusals `unsupported_transfer` (-32018) and `transfer_failed` (-32019)
+are not separately negotiated. Use matching refusal-aware daemon and Go/JS
+SDK/kit versions at every transfer endpoint. Codex endpoints also need the
+matching peer-common and codex-peer set. An older unreleased transfer-capable
+kit rejects the new error codes and closes its connection; ordinary capability
+opt-in does not establish mixed-version compatibility.
+
+A received semantic refusal keeps its explicit code across the bridge, including
+create, status, finish and chunk. Cancellation before ID allocation uses `internal` / `transfer_unavailable`; it does not fabricate a cancelled or
+failed transfer. After an allocated descriptor, local binding/role/association
+failure remains unavailable, as do transport loss and ended attachments. Existing
+active `unknown` / `coordinator_ended` outcomes preserve publication uncertainty.
 
 Workers have no info object. A capable daemon prefixes its opaque random launch
 token with `sbt1:`. A new SDK sends `supports_transfer:true` only with that prefix
@@ -994,18 +1009,39 @@ consumed. A healthy indefinite Run or wait has no new total deadline.
 A mark releases ordinary forwarded waiters once with existing `forward_lost`;
 message sends retain their existing `rejected/no_receipt` uncertainty. It does
 not close the link, end an owner, cancel remote work, replay, acknowledge a Run,
-or change transfer publication knowledge. Its correlations remain charged until
-the actual reply or link end; late replies are validated and drained. New calls
-to a marked attachment refuse immediately. A valid retained probe reply clears
-the mark on that attachment. It never changes an already-returned answer.
+or change transfer publication knowledge. Exact-ID/name `session.list` lookups
+are targeted calls and return `forward_lost`; they never become successful empty
+lists on a mark. Broad and host-only lists retain the partial projection below. Its correlations remain charged until
+the actual reply or link end; late replies are validated and drained. New
+ordinary forwarded and roster/hosts management calls receive their existing
+refusal or broad-list partial projection immediately. Transfer controls and
+owner-end/host-end lifetime cleanup bypass the liveness mark; their existing
+capability, capacity, ordering and transport checks still apply. Own probes
+continue, and a valid retained probe reply clears the mark on that attachment.
+Mark and clear transitions log the host and time once. They never change an
+already-returned answer.
 
-The ordinary queued-plus-pending limit remains 256, with four independent bulk
-correlations and one reserved small probe. Ordinary forward, roster and hosts
-overflow refuses without closing. Existing owner-end/host-end cleanup that
-cannot queue still closes through link loss. Healthy long waits can already fill
-the retained cap before silence; marking prevents new admissions, not prior
-charges. Probes cannot bypass an actual blocked write, reader, inbox or reply
-queue. Saturation of those existing paths can still close a link.
+The destination queued-plus-pending limit remains 256, with four independent
+bulk correlations and one reserved small probe. Ordinary forward, roster and
+hosts overflow refuses without closing. Mark-released correlations stay charged
+until their real reply or link end. They can fill the destination cap; a later
+owner-end/host-end cleanup that cannot queue still closes through link loss
+(recorded limit F1).
+
+The hub also reserves at most 256 incoming calls per origin across forwards,
+hosts, roster, owner-end and transfer operations. The dedicated reply channel
+has capacity 264. A reply keeps its reservation until owner consumption; enqueue,
+mark release and helper return do not free it. A 257th call gets a per-call
+`forward_lost`, or `busy` for transfers, without dispatch. A valid refused hosts
+probe still counts as the hub answering. Ordinary writer/transport backpressure
+remains independent and can still close a link.
+
+An `owner_end` error alone takes the existing fail-closed daemon-link path. If a
+host has 256 calls in flight through the hub and a session ends then, its hub
+link restarts; its non-persistent cross-host lanes end while persistent lanes
+keep running. Parent trace state is cleared. Previously, a full shared reply
+inbox could also remove an origin during ordinary first-release response bursts.
+No universal overflow/ownership guarantee follows from the new reply bound.
 
 `sessionbus-availability/1` is an ALPN superset of transfer, wake, trace and roster.
 Each hop strips the optional caller `availability` bit before an old hop. A peer
@@ -1020,7 +1056,8 @@ List aggregation preserves confirmed local and other-host rows. A silent host
 contributes no sessions. Only an opted-in request over supporting hops may get
 `hosts:[{host,products:[],availability:"not_responding"}]` for that leg. Other
 requests keep the old shape with that leg omitted. A generic capacity or admission
-refusal omits the leg without asserting that the host missed its probes. Opt-in
+refusal omits the leg without asserting that the host missed its probes. A legacy host-only list of a marked destination
+can still be a successful empty list (recorded limit F3). Opt-in
 is captured at request admission, including aggregates, rather than read from a
 later hello. If the
 whole hub cannot answer its hosts request, only confirmed local rows are
@@ -1038,15 +1075,25 @@ keepalive with an observable unsupported drop-time option. A stuck worker behind
 a responsive host, and application silence while the transport makes progress,
 remain separate from transport retirement.
 
-### 1.8 Optional hub policy
+In one isolated acceptance test at daemon 7f54c591, the directed public host list
+changed to responding between 13.032762 and 14.039763 seconds after a 45-second
+blackhole rule was removed. This roughly 14-second user-visible recovery delay
+is a test observation, not an SLA or proof of an internal mark/TCP cause. A
+fixed short sleep after restoring a path does not prove readiness.
 
-The optional mode-0600 `--policy` JSON file independently limits each host's
+### 1.8 Experimental hub policy
+
+**EXPERIMENTAL: do not enable on a real hub yet.** The optional mode-0600
+`--policy` JSON file independently limits each host's
 named federation groups, remote lane destinations (`lanes_to`) and permitted
 remote lane sources (`lanes_on`). Missing dimensions remain unrestricted; an
 empty array denies that dimension. Invalid startup configuration fails closed.
-SIGHUP validates and atomically reloads the whole file, retaining the previous
+Every host name, including lane-rule members, must occur in the loaded secret
+map. SIGHUP validates and atomically reloads the whole file, retaining the previous
 policy on failure without closing links. Unconfigured host pairs bypass policy
-rewriting, relation tracking and refusals.
+rewriting, relation tracking and refusals. Empty `{}` entries still turn on
+tracking and associated roster observations. A successful reload logs once;
+SIGHUP without `--policy` is logged and ignored.
 
 For a groups-restricted pair, the hub forwards allowed named groups only, plus a
 fresh mandatory random private group for each ordinary call. Verified recorded
@@ -1065,9 +1112,11 @@ children. Actual target validation and grant recording precede spawn success,
 including authoritative late completion after an earlier silence answer.
 
 The transient relation table is capped at 256 live plus in-flight grants per
-destination, retains close entries, and removes exact-generation forgets or
+(source, destination) pair, returns `busy` at the cap, retains closed entries,
+and removes exact-entry forgets or
 complete fresh current-attachment roster absences. It is empty at hub start.
-Private-only successful resume may prove deliberate access (creator or explicit
+A newly enabled groups rule cannot recover creator relations from previously
+untracked spawns. Private-only successful resume may prove deliberate access (creator or explicit
 extra-group grantee) and reconstruct directed caller-to-lane access for all
 known-ID operations, with no derived identity, reverse notice/trace or transfer
 grant. Named-present resume adds no grant; existing entries are reused unchanged.
@@ -1504,9 +1553,10 @@ durable state. A daemon learns that roster only by issuing the private
 `session.list` with a canonical `session_id` or explicit `host` is forwarded
 directly to that host. An unqualified list captures the current host roster,
 runs one host-specific list at each captured daemon plus its local list, and
-merges the results at the origin. If a captured host is lost before its reply,
-the whole aggregate list fails with `forward_lost`; partial lists have no public
-representation. There is deliberately no atomic cross-host list: each
+merges confirmed results at the origin. A lost or nonresponding leg contributes
+no sessions; supporting opted-in callers may receive its not-responding stub.
+Exact `session_id` lookups remain targeted and return `forward_lost`. There is
+no atomic cross-host list: each
 destination takes its ordinary local snapshot when its forwarded call arrives.
 With no hub link an unqualified list remains a local list.
 
@@ -1602,7 +1652,7 @@ The admitted mapping is closed:
 | Origin operation | Destination and private request |
 | --- | --- |
 | Directed `session.list` | Explicit `host` or the last-`@` suffix of `session_id`; the destination performs its ordinary local list and visibility filter. |
-| Aggregate `session.list` | Capture `federation.hosts`; send a host-specific list to each captured host and merge with the local list. Any lost leg fails the whole call. |
+| Aggregate `session.list` | Capture `federation.hosts`; merge confirmed local and other-host rows. A lost leg contributes no sessions; a silent leg may add an opted-in not-responding stub. Explicit `session_id` lookups remain targeted and return `forward_lost`. |
 | `lane.describe` | Its explicit non-local `host`; the destination performs the ordinary local describe path. |
 | Fresh `lane.spawn` | Its explicit non-local `host`; the destination composes parent/leaf from captured `from.name` and `from.private_group`. |
 | Resume `lane.spawn` | The last-`@` suffix of canonical `resume_session_id`. |
@@ -1633,15 +1683,17 @@ run's terminal response is processed before the corresponding remote close
 response is released, matching the local lifecycle.
 
 The destination host-link owner owns its link-local ID space, pending calls,
-and cap-1 reply slots. It permits 256 unanswered forwarded calls; admission of
-the 257th closes that destination link and settles every pending or accepted
-queued call once with `forward_lost`. A reconnect is a new exact attachment and
+and cap-1 reply slots. It permits 256 queued plus unanswered ordinary calls;
+a 257th forward is refused per-call with `forward_lost`, preserving admitted
+work and the link. Mark-released correlations still hold slots until real reply
+or link end. Cleanup at that retained cap and independent writer/transport
+backpressure can still close a link; retirement settles its queued/pending
+calls once. A reconnect is a new exact attachment and
 ID space, so an old reply is never resolved through a host name into it.
 Transport loss returns `forward_lost`; no request is retried or replayed. A
-configured daemon attachment is one-shot: initial dial failure fails daemon
-startup, while a later link loss leaves that daemon local until it is restarted.
-Reconnect rows prove a fresh attachment and ID space after restart, not an
-automatic retry supervisor. The hub changes only the correlation ID, and the
+daemon reconnects with bounded backoff after dial or link loss, preserving local
+operations. Each replacement has a fresh attachment and ID space; it does not
+recover old ownership or replay an interrupted operation. The hub changes only the correlation ID, and the
 result value or complete error object is byte-identical on return.
 
 The registry owner alone owns the authenticated host map and processes
@@ -1661,9 +1713,8 @@ those unobservable terminal replies.
 
 Every encoded private request and response is measured before enqueue under the
 same 1 MiB frame bound. If the added forwarding envelope makes an otherwise
-valid public request too large, the origin receives `invalid_frame` with data
-`forwarded request exceeds the frame limit`, and the request never leaves. No
-chunking exists. Replay, durable hub rows, session snapshots, update streams,
+valid public request too large, the origin receives `invalid_frame` without data, and the request never leaves. No
+public-request chunking exists. Replay, durable hub rows, session snapshots, update streams,
 distributed locks, automatic placement, multi-hop routes, and capability
 negotiation are explicitly outside version 1.
 
@@ -1689,16 +1740,16 @@ The literal implementation layout is:
 | `bus/sdk/go/protocol` | Two optional public host selectors and retention of the complete decoded error member. |
 | `bus/cmd/sessionbus`, `bus/cmd/sessionbus-hub` | Secret/config composition only; no routing owner. |
 
-`bus/internal/conn` is reused unchanged at 94 logical production lines as the
-single bounded reader, ordered writer, outbox, and fd-close terminator. The
-daemon directory remains the sole local-row lock. Exact attachment identity,
-cap-1 reply slots, and joined helpers are retained ownership conventions, not a
-new generic router. Making the existing daemon a host-mode engine was rejected:
-duplicate-host admission keeps the incumbent rather than superseding it, host
-roster requests have no session-row analogue, the 257th forward closes a link
-rather than returning busy, and hub-link loss removes no local directory row.
-These are the measured unchanged-code reuse candidates; no host/session mode or
-callback family is introduced.
+The measured pull prototype reused `bus/internal/conn` unchanged at 94 logical
+production lines as its bounded reader, ordered writer, outbox, and fd-close
+terminator. Its host-mode-engine rejection rationale is historical: duplicate
+host admission kept the incumbent, roster requests had no session-row analogue,
+a 257th forward closed the link, and hub loss removed no local directory row.
+Current ordinary forwarding instead refuses excess calls per-call; retained
+cleanup and writer/transport loss remain the distinct closing limits described
+above. The daemon directory remains the sole local-row lock, with exact
+attachment identity, cap-1 reply slots and joined helpers; no host/session mode
+or generic callback family is introduced.
 
 The frozen replication prototype is retained only as budget evidence. On exact
 base `044de4c`, its sealed corrected patch
@@ -2649,8 +2700,8 @@ check.
 | Control and creation | Canonical remote resume/run/interrupt/close and explicit-host spawn/describe travel exactly one hop as `{from:{session_id:id@host,name:name@host,product,private_group,groups},request}`; the TLS connection identifies the origin and the JSON-RPC ID correlates it. The destination enters the same local request dispatcher with that captured identity, rejects a non-local target, and never forwards again. Collector loss removes its reply sink; authenticated lifetime loss separately closes nonpersistent children. Transport loss returns `forward_lost` without retry. |
 | Federation authentication | `sessionbus secret` produces 32 random bytes in base64; either side rejects a decoded secret shorter than 32 bytes. Wrong secret, unknown or reserved `local` name, or name/key mismatch fails TLS. The registry admits the first authenticated attachment and closes a later duplicate host, preserving the incumbent. Config is immutable while running; rotation restarts both endpoints and reconnects. No separate expiry/revocation exists, and secret-bearing config is mode 0600. |
 | Optional local encryption | **Not implemented in 0.5.0; reserved.** Both kits consume and scrub `SESSIONBUS_LOCAL_KEY` and reject a nonempty value. The passing 0.5.0 rows cover the owner-checked `0700` runtime directory, `0600` socket, and launch-token scrubbing—not a local-TLS handshake. Host-to-hub TLS remains implemented and required. |
-| Roster and aggregate list | `federation.hosts` returns one sorted snapshot of current authenticated host names. An aggregate list fans out from that capture and fails wholly with `forward_lost` if any captured leg is lost; there is no atomic cross-host list or partial result. |
-| Reconnect | The 256 pending-forward cap is additional to conn bounds; admitting the 257th closes that destination link. Disconnect fails admitted destination calls once as `forward_lost`. The configured attachment is one-shot: later loss requires daemon restart, whose fresh attachment and ID space never receive an old reply or replayed request. |
+| Roster and aggregate list | `federation.hosts` returns one sorted snapshot of current authenticated host names. An aggregate list fans out from that capture and preserves confirmed local/other-host rows; a silent leg may add an opted-in availability stub. Exact session lookups return `forward_lost`. There is no atomic cross-host snapshot. |
+| Reconnect | The 256 retained destination-forward cap refuses ordinary excess calls per call. Retained mark-released correlations and cleanup-at-cap link loss remain limits. The hub's separate 256-origin reservation frees only on reply consumption. Daemons reconnect with bounded backoff and fresh attachment/ID space, without replay or old ownership recovery. |
 | Refused federation machinery | The hub has no replicated session/product state, notifications, replay, durable rows, distributed locks, automatic placement, multi-hop routing, or capability negotiation that gates PATH launch. |
 
 ### 5.8 Test rehoming

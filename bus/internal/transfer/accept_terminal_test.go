@@ -64,7 +64,7 @@ func TestUnconfirmedSourceStartStillRejectsAcceptWithoutReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.Announce(d.ID)
-	if _, err = e.Accept(dest.ep.Key, protocol.TransferAccept{ID: d.ID}); !errors.Is(err, ErrState) || starts != 1 {
+	if _, err = e.Accept(dest.ep.Key, protocol.TransferAccept{ID: d.ID}); !errors.Is(err, ErrStartUnconfirmed) || starts != 1 {
 		t.Fatal("unconfirmed start became successful or replayed", err, starts)
 	}
 	assertTerminalResources(t, e, source, dest, d.ID, "unknown", "source_start_unconfirmed")

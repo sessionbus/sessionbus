@@ -86,7 +86,7 @@ func TestPolicyRelationCompletionCapCollisionAndGeneration(t *testing.T) {
 		t.Fatal("first reservation refused")
 	}
 	value, once := r.complete(first, relationResult("child@beta"), true)
-	if !once || value.Error != nil || !r.counterpart("parent@alpha", "child@beta") || r.charges["beta"] != 1 {
+	if !once || value.Error != nil || !r.counterpart("parent@alpha", "child@beta") || r.charges[policyPair{"alpha", "beta"}] != 1 {
 		t.Fatal("success did not install its exact grant")
 	}
 	old := r.entries["child@beta"]
@@ -95,7 +95,7 @@ func TestPolicyRelationCompletionCapCollisionAndGeneration(t *testing.T) {
 	if value, _ := r.complete(duplicate, relationResult("child@beta"), true); value.Error == nil || value.Error.Code != protocol.ForwardLost || r.entries["child@beta"] != old {
 		t.Fatal("collision exposed success or replaced a live grant")
 	}
-	foreign := &policyAdmission{kind: policyFresh, destination: link}
+	foreign := &policyAdmission{kind: policyFresh, destination: link, creator: "parent@alpha"}
 	r.admit(foreign)
 	if value, _ := r.complete(foreign, relationResult("child@gamma"), true); value.Error == nil || r.entries["child@gamma"] != nil {
 		t.Fatal("foreign identity acquired a grant")
@@ -107,18 +107,18 @@ func TestPolicyRelationCompletionCapCollisionAndGeneration(t *testing.T) {
 	r.admit(replacement)
 	r.complete(replacement, relationResult("child@beta"), true)
 	r.complete(forget, emptyReply(), true)
-	if r.entries["child@beta"] == nil || r.entries["child@beta"].creator != "new@alpha" || r.entries["child@beta"].generation == old.generation {
+	if r.entries["child@beta"] == nil || r.entries["child@beta"].creator != "new@alpha" || r.entries["child@beta"] == old {
 		t.Fatal("late forget removed the successor generation")
 	}
 	if _, repeated := r.complete(forget, emptyReply(), true); repeated {
 		t.Fatal("duplicate completion was settled twice")
 	}
-	for range policyRelationsPerHost - 1 {
-		if !r.admit(&policyAdmission{kind: policyFresh, destination: link}) {
+	for range policyRelationsPerPair - 1 {
+		if !r.admit(&policyAdmission{kind: policyFresh, destination: link, creator: "parent@alpha"}) {
 			t.Fatal("pending cap refused before counting live+in-flight")
 		}
 	}
-	if r.admit(&policyAdmission{kind: policyFresh, destination: link}) || r.charges["beta"] != policyRelationsPerHost {
+	if r.admit(&policyAdmission{kind: policyFresh, destination: link, creator: "parent@alpha"}) || r.charges[policyPair{"alpha", "beta"}] != policyRelationsPerPair {
 		t.Fatal("in-flight spawns bypassed the relation cap")
 	}
 }
@@ -127,7 +127,7 @@ func TestPolicyRelationVerificationAndOnlyFreshCompleteRosterPrunes(t *testing.T
 	r := newPolicyRelations()
 	when := time.Now()
 	entry := &policyRelation{lane: "child@beta", creator: "parent@alpha", parentPrivate: "session:parent@alpha", private: "session:parent@alpha/child", recorded: when}
-	r.entries[entry.lane], r.charges["beta"] = entry, 1
+	r.entries[entry.lane], r.charges[policyPair{"alpha", "beta"}] = entry, 1
 	for _, caller := range []Caller{{SessionID: "parent@alpha", PrivateGroup: "session:parent@alpha"}, {SessionID: "child@beta", PrivateGroup: entry.private}} {
 		if _, _, ok := r.verified(caller); !ok {
 			t.Fatal("verified parent or lane refused", caller)
@@ -145,7 +145,7 @@ func TestPolicyRelationVerificationAndOnlyFreshCompleteRosterPrunes(t *testing.T
 		t.Fatal("stale/incomplete/error or offline-retained row was treated as absence")
 	}
 	r.prune("beta", when.Add(time.Second), empty)
-	if r.entries[entry.lane] != nil || r.charges["beta"] != 0 {
+	if r.entries[entry.lane] != nil || r.charges[policyPair{"alpha", "beta"}] != 0 {
 		t.Fatal("fresh complete absence did not retire the grant")
 	}
 }

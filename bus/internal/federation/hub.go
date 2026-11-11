@@ -71,20 +71,22 @@ type registryEvent struct {
 }
 
 type hostLink struct {
-	liveness     linkLiveness
-	transfers    atomic.Pointer[hubTransfers]
-	transferBulk chan TransferCall
-	attachment   string
-	rosterSlots  chan struct{}
-	ctx          context.Context
-	host         string
-	fd, raw      net.Conn
-	wire         *conn.Conn
-	inbox        chan any
-	registry     chan<- registryEvent
-	done         chan struct{}
-	group        sync.WaitGroup
-	log          io.Writer
+	originAdmitted int // Connection owner only; enqueue never releases a slot.
+	originReplies  chan originReply
+	liveness       linkLiveness
+	transfers      atomic.Pointer[hubTransfers]
+	transferBulk   chan TransferCall
+	attachment     string
+	rosterSlots    chan struct{}
+	ctx            context.Context
+	host           string
+	fd, raw        net.Conn
+	wire           *conn.Conn
+	inbox          chan any
+	registry       chan<- registryEvent
+	done           chan struct{}
+	group          sync.WaitGroup
+	log            io.Writer
 }
 
 type hubState struct {
@@ -357,7 +359,7 @@ func newHostLink(ctx context.Context, host string, fd, raw net.Conn, registry ch
 	if _, err := rand.Read(identity); err != nil {
 		panic(err)
 	}
-	link := &hostLink{transferBulk: make(chan TransferCall, 4), rosterSlots: make(chan struct{}, 8), attachment: hex.EncodeToString(identity), ctx: ctx, host: host, fd: fd, raw: raw, inbox: make(chan any, conn.OutboxSize), registry: registry, done: make(chan struct{}), log: log}
+	link := &hostLink{originReplies: make(chan originReply, conn.OutboxSize+8), transferBulk: make(chan TransferCall, 4), rosterSlots: make(chan struct{}, 8), attachment: hex.EncodeToString(identity), ctx: ctx, host: host, fd: fd, raw: raw, inbox: make(chan any, conn.OutboxSize), registry: registry, done: make(chan struct{}), log: log}
 	link.wire = conn.Start(fd, link.inbox, &link.group)
 	link.wire.SetBulkGate(func(frame protocol.Frame) bool {
 		h := link.transfers.Load()
@@ -409,12 +411,16 @@ func (l *hostLink) run(accepted bool) {
 			raw = event
 		case event := <-l.transferBulk:
 			raw = event
+		case event := <-l.originReplies:
+			raw = event
 		case raw = <-l.inbox:
 		}
 		switch event := raw.(type) {
 		case livenessTick:
 			if !failed && SupportsRoster(l.fd) {
-				l.liveness.tick(event.at, rosterMethod, l.wire, queued, pending)
+				if l.liveness.tick(event.at, rosterMethod, l.wire, queued, pending) {
+					logLinkTransition(l.log, l.host, "not_responding", event.at)
+				}
 			}
 		case TransferCall:
 			if failed || !SupportsTransfer(l.fd) || !queueTransferCall(l.wire, queued, pending, event) {
@@ -449,7 +455,7 @@ func (l *hostLink) run(accepted bool) {
 			policyEnabled := event.value.From.Policy && SupportsPolicy(l.fd)
 			event.value.From.Policy = policyEnabled
 			if l.liveness.silent.Load() {
-				p := pendingCall{method: request.Method, availability: capable}
+				p := pendingCall{lookup: exactSessionLookup(request), method: request.Method, availability: capable}
 				p.target, _ = targetHost(request)
 				settleForward(event, silenceReply(&p))
 				continue
@@ -477,14 +483,12 @@ func (l *hostLink) run(accepted bool) {
 				settleForward(event, errorReply(protocol.InvalidFrame, nil))
 				continue
 			}
-			if !queueCall(l.wire, queued, pendingCall{policyEnabled: policyEnabled, policy: event.policy, forwarded: true, availability: capable, method: request.Method, reply: event.reply, trace: request.Trace, target: target}, false, func(id int64) ([]byte, error) { body, _, err := forwardRequestBytes(id, forwarded); return body, err }) {
+			if !queueCall(l.wire, queued, pendingCall{lookup: exactSessionLookup(request), policyEnabled: policyEnabled, policy: event.policy, forwarded: true, availability: capable, method: request.Method, reply: event.reply, trace: request.Trace, target: target}, false, func(id int64) ([]byte, error) { body, _, err := forwardRequestBytes(id, forwarded); return body, err }) {
 				settleForward(event, errorReply(protocol.ForwardLost, nil))
 				continue
 			}
 		case originReply:
-			if event.release != nil {
-				event.release()
-			}
+			l.consumeOriginReply(event)
 			body, err := responseBytes(event.id, event.value, true)
 			if !failed && (err != nil || !l.wire.Send(body)) {
 				failed = true
@@ -494,10 +498,15 @@ func (l *hostLink) run(accepted bool) {
 			l.wire.DrainDispatched(func(d conn.Dispatched) { installCall(d, queued, pending) })
 			if !failed {
 				if err := l.frame(event, pending, &lastIn); err != nil {
+					if event.Release != nil {
+						event.Release()
+					}
 					fmt.Fprintln(l.log, err)
 					failed = true
 					l.wire.Close()
 				}
+			} else if event.Release != nil {
+				event.Release()
 			}
 		case conn.Closed:
 			l.wire.DrainDispatched(func(d conn.Dispatched) { installCall(d, queued, pending) })
@@ -511,6 +520,7 @@ func (l *hostLink) run(accepted bool) {
 			}
 			settlePending(pending)
 			l.settleQueued()
+			l.retireOriginReplies()
 			return
 		}
 	}
@@ -557,7 +567,9 @@ func (l *hostLink) frame(event conn.Frame, pending map[int64]pendingCall, lastIn
 		}
 		delete(pending, frame.ID)
 		if call.probe != nil {
-			call.probe.replied()
+			if call.probe.replied() {
+				logLinkTransition(l.log, l.host, "responding", call.probe.lastReply)
+			}
 			if call.method == rosterMethod && l.liveness.observeRoster.Load() && reply.Error == nil {
 				postRegistry(l.ctx, l.registry, registryEvent{kind: registryPolicyRoster, link: l, observation: &policyRosterObservation{selected: call.selectedAt, reply: reply}})
 			}
@@ -575,14 +587,31 @@ func (l *hostLink) frame(event conn.Frame, pending map[int64]pendingCall, lastIn
 		if h == nil || !SupportsTransfer(l.fd) {
 			return errFrame
 		}
-		transferFrame := connTransferFrame{value: frame, release: event.Release}
 		switch frame.Method {
-		case TransferCreateMethod:
-			postRegistry(l.ctx, l.registry, registryEvent{kind: registryTransferCreate, link: l, transfer: &transferFrame})
-		case TransferAnnounceMethod, TransferEndMethod, "transfer.accept", "transfer.status", "transfer.cancel", "transfer.fail", "transfer.chunk", "transfer.finish":
-			h.submit(l, transferFrame)
+		case TransferCreateMethod, TransferAnnounceMethod, TransferEndMethod, "transfer.accept", "transfer.status", "transfer.cancel", "transfer.fail", "transfer.chunk", "transfer.finish":
 		default:
 			return errFrame
+		}
+		params, err := decodeTransferParams(frame.Method, frame.Params)
+		if err == nil && frame.Method == TransferCreateMethod {
+			input := params.(*TransferCreate)
+			source, _ := suffix(input.From.SessionID)
+			if source != l.host || input.From.SourceAttachment != "" {
+				err = errFrame
+			}
+		}
+		if err != nil {
+			l.refuseOrigin(event, protocol.Internal, "transfer_unavailable")
+			return nil //nolint:nilerr // A correlated typed-parameter refusal preserves this link.
+		}
+		if !l.admitOrigin(event, protocol.Busy) {
+			return nil
+		}
+		transferFrame := connTransferFrame{value: frame, release: event.Release}
+		if frame.Method == TransferCreateMethod {
+			postRegistry(l.ctx, l.registry, registryEvent{kind: registryTransferCreate, link: l, transfer: &transferFrame})
+		} else {
+			h.submit(l, transferFrame)
 		}
 		return nil
 	}
@@ -590,6 +619,9 @@ func (l *hostLink) frame(event conn.Frame, pending map[int64]pendingCall, lastIn
 		var params map[string]json.RawMessage
 		if !SupportsRoster(l.fd) || protocol.DecodeJSON(frame.Params, &params) != nil || params == nil || len(params) != 0 {
 			return errFrame
+		}
+		if !l.admitOrigin(event, protocol.ForwardLost) {
+			return nil
 		}
 		postRegistry(l.ctx, l.registry, registryEvent{kind: registryRoster, link: l, id: frame.ID})
 		return nil
@@ -599,6 +631,9 @@ func (l *hostLink) frame(event conn.Frame, pending map[int64]pendingCall, lastIn
 		if protocol.DecodeJSON(frame.Params, &params) != nil || params == nil || len(params) != 0 {
 			return errFrame
 		}
+		if !l.admitOrigin(event, protocol.ForwardLost) {
+			return nil
+		}
 		postRegistry(l.ctx, l.registry, registryEvent{kind: registryHosts, link: l, id: frame.ID})
 		return nil
 	}
@@ -606,6 +641,9 @@ func (l *hostLink) frame(event conn.Frame, pending map[int64]pendingCall, lastIn
 		var value OwnerEnd
 		if protocol.DecodeJSON(frame.Params, &value) != nil || !validHost(value.Host) || !ownedPart(value.SessionID, l.host, false) || value.Lifetime == "" || value.Source != "" || value.Attachment != "" {
 			return errFrame
+		}
+		if !l.admitOrigin(event, protocol.ForwardLost) {
+			return nil
 		}
 		postRegistry(l.ctx, l.registry, registryEvent{kind: registryOwnerEnd, link: l, ownerEnd: &incomingOwnerEnd{frame.ID, value}})
 		return nil
@@ -621,6 +659,9 @@ func (l *hostLink) frame(event conn.Frame, pending map[int64]pendingCall, lastIn
 		return errFrame
 	}
 	if err == nil {
+		if !l.admitOrigin(event, protocol.ForwardLost) {
+			return nil
+		}
 		postRegistry(l.ctx, l.registry, registryEvent{kind: registryForward, link: l, forward: &incomingForward{id: frame.ID, value: value, host: host}})
 	}
 	return err
@@ -688,7 +729,7 @@ func (s *hubState) forward(ctx context.Context, inbox chan<- registryEvent, orig
 	availability := call.value.From.Availability && SupportsAvailability(origin.fd)
 	policyEnabled := call.value.From.Policy && SupportsPolicy(origin.fd)
 	if destination.liveness.silent.Load() {
-		p := pendingCall{method: call.value.Request.Method, target: call.host, availability: availability}
+		p := pendingCall{lookup: exactSessionLookup(call.value.Request), method: call.value.Request.Method, target: call.host, availability: availability}
 		s.reply(originReply{origin: origin, id: call.id, value: silenceReply(&p), method: call.value.Request.Method, availability: availability, policyEnabled: policyEnabled})
 		return
 	}
@@ -746,15 +787,15 @@ func (s *hubState) reply(event originReply) {
 		if event.value.Trace == nil {
 			event.value.Trace = []TraceRecipient{}
 		} else {
-			event.value.Trace = s.liveTraceRecipients(event.destination, event.value.Trace)
+			event.value.Trace = s.liveTraceRecipients(event.destination, event.policy, event.value.Trace)
 		}
 	}
-	if s.links[event.origin.host] != event.origin || !event.origin.wire.Post(event) {
+	if s.links[event.origin.host] != event.origin || !event.origin.postOriginReply(event) {
 		s.remove(event.origin)
 	}
 }
 
-func (s *hubState) liveTraceRecipients(destination *hostLink, values []TraceRecipient) []TraceRecipient {
+func (s *hubState) liveTraceRecipients(destination *hostLink, scope *policyReplyScope, values []TraceRecipient) []TraceRecipient {
 	if destination == nil || s.links[destination.host] != destination {
 		return []TraceRecipient{}
 	}
@@ -770,7 +811,15 @@ func (s *hubState) liveTraceRecipients(destination *hostLink, values []TraceReci
 				continue
 			}
 		}
-		value.Owner.Groups = append([]string(nil), value.Owner.Groups...)
+		if ownerHost != destination.host && scope != nil && scope.policy.groupsRestricted(destination.host, ownerHost) {
+			groups := scope.policy.namedGroups(destination.host, ownerHost, value.Owner.Groups)
+			if len(groups) == 0 && !s.relations.counterpart(value.Child, value.Owner.SessionID) {
+				continue
+			}
+			value.Owner.Groups = appendPolicyGroups(groups, []string{value.Owner.PrivateGroup})
+		} else {
+			value.Owner.Groups = append([]string(nil), value.Owner.Groups...)
+		}
 		result = append(result, value)
 	}
 	return result

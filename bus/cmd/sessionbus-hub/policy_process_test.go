@@ -129,6 +129,10 @@ func TestHubPolicySIGHUPReloadRetainsLinksAndInvalidSnapshot(t *testing.T) {
 					reply = federation.RosterReply(roster.Host{Host: host, Products: []string{}, Sessions: []roster.Row{}})
 				} else if call.Request.Method == "session.list" {
 					reply.Result = []byte(`{"sessions":[{"session_id":"row@beta","kind":"peer","product":"fixture","groups":["team","other"],"connected":true,"running":false}]}`)
+					var input protocol.SessionListRequest
+					if protocol.DecodeJSON(call.Request.Params, &input) == nil && input.SessionID == "" && len(call.From.Groups) == 1 && call.From.Groups[0] == call.From.PrivateGroup {
+						reply.Result, _ = protocol.EncodeResult("session.list", protocol.SessionListResult{Sessions: []protocol.SessionSummary{}, Hosts: []protocol.HostProducts{{Host: host, Products: []string{"fixture"}}}})
+					}
 				} else {
 					seen <- call.From
 				}

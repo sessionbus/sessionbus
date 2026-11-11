@@ -150,7 +150,7 @@ func TestOwnErrorEncodingLogsOnce(t *testing.T) {
 	cmd := exec.Command(os.Args[0], "-test.run=^TestOwnErrorEncodingLogsOnce$")
 	cmd.Env = append(os.Environ(), "SESSIONBUS_TEST_ERROR_LOG_CHILD=1")
 	raw, err := cmd.CombinedOutput()
-	if err != nil || strings.Count(string(raw), "cannot encode daemon RPC error") != 1 || !strings.Contains(string(raw), "data") {
+	if err != nil || strings.Count(string(raw), "cannot encode daemon RPC error") != 1 || !strings.Contains(string(raw), "code=-32603;") {
 		t.Fatalf("bounded real encoding diagnostic = %s, %v", raw, err)
 	}
 }
