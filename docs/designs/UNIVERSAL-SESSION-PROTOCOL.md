@@ -1012,10 +1012,14 @@ not close the link, end an owner, cancel remote work, replay, acknowledge a Run,
 or change transfer publication knowledge. Exact-ID/name `session.list` lookups
 are targeted calls and return `forward_lost`; they never become successful empty
 lists on a mark. Broad and host-only lists retain the partial projection below. Its correlations remain charged until
-the actual reply or link end; late replies are validated and drained. New calls
-to a marked attachment refuse immediately. A valid retained probe reply clears
-the mark on that attachment. Mark and clear transitions log the host and time
-once. It never changes an already-returned answer.
+the actual reply or link end; late replies are validated and drained. New
+ordinary forwarded and roster/hosts management calls receive their existing
+refusal or broad-list partial projection immediately. Transfer controls and
+owner-end/host-end lifetime cleanup bypass the liveness mark; their existing
+capability, capacity, ordering and transport checks still apply. Own probes
+continue, and a valid retained probe reply clears the mark on that attachment.
+Mark and clear transitions log the host and time once. They never change an
+already-returned answer.
 
 The destination queued-plus-pending limit remains 256, with four independent
 bulk correlations and one reserved small probe. Ordinary forward, roster and

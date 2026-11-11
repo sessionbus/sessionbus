@@ -22,7 +22,7 @@ func bulkCreditFixture(t *testing.T) (*hostLink, func() conn.Frame, func() conn.
 	var group sync.WaitGroup
 	wire := conn.Start(left, inbox, &group)
 	wire.SetBulkGate(func(protocol.Frame) bool { return true })
-	link := &hostLink{wire: wire, inbox: inbox, originReplies: make(chan originReply, conn.OutboxSize+8)}
+	link := &hostLink{wire: wire, raw: right, inbox: inbox, originReplies: make(chan originReply, conn.OutboxSize+8)}
 	var id int64
 	send := func() conn.Frame {
 		id++

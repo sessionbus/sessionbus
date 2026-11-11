@@ -19,7 +19,12 @@ const fallbackError = `{"code":-32603,"message":"internal","data":"internal"}`
 
 func fallbackErrorRaw(code string) json.RawMessage {
 	key := 0
-	if numeric, err := strconv.Atoi(code); err == nil {
+	var parsed protocol.Integer
+	var original float64
+	if json.Unmarshal([]byte(code), &parsed) == nil && json.Unmarshal([]byte(code), &original) == nil && float64(parsed) == original {
+		// Match the protocol's integral JSON-number semantics, including
+		// decimal/exponent forms, without allowing an out-of-range int alias.
+		numeric := int(parsed)
 		var data any
 		switch numeric {
 		case protocol.Internal:

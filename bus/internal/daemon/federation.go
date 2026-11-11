@@ -113,7 +113,7 @@ func (d *Daemon) reconnectFederation(ctx context.Context, configuration *tls.Con
 		cancel()
 		if err == nil {
 			connected := time.Now()
-			link, linkErr := d.startFederation(ctx, fd, io.Discard)
+			link, linkErr := d.startFederation(ctx, fd, os.Stderr)
 			if linkErr == nil {
 				// The link inherits ctx, so shutdown cancels and joins its transport,
 				// handlers and remote ownership before the supervisor returns.
