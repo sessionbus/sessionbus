@@ -24,7 +24,7 @@ import (
 func TestSemanticHostRefusalsKeepSamePeer(t *testing.T) {
 	secrets := reconnectSecrets()
 	_, address := reconnectHub(t, "127.0.0.1:0", secrets)
-	_, socket := reconnectDaemon(t, "alpha", address, secrets["alpha"])
+	alpha, socket := reconnectDaemon(t, "alpha", address, secrets["alpha"])
 	for index, host := range []string{"dev2-nonexistent-fed-host-20261019", "BAD", "-invalid", "gamma", strings.Repeat("z", 32)} {
 		for _, method := range []string{"lane.describe", "lane.spawn"} {
 			t.Run(method+"/"+host, func(t *testing.T) {
@@ -43,6 +43,53 @@ func TestSemanticHostRefusalsKeepSamePeer(t *testing.T) {
 				var rows protocol.SessionListResult
 				if err = peer.call("session.list", protocol.SessionListRequest{SessionID: id}, &rows); err != nil || len(rows.Sessions) != 1 || rows.Sessions[0].SessionID != id+"@alpha" {
 					t.Fatalf("same caller lost after refusal: %#v %v", rows, err)
+				}
+				if host == "gamma" && method == "lane.spawn" {
+					// Force the refused spawn's lifetime end before the next describe,
+					// rather than racing asynchronous subtest cleanup against it.
+					alpha.directory.mu.Lock()
+					link := alpha.federation
+					owner := alpha.directory.entries[id+"@alpha"].lifetime
+					remembered := owner != nil && owner.destinations[host]
+					alpha.directory.mu.Unlock()
+					if link == nil || !remembered {
+						t.Fatal("unknown-host spawn was not forwarded on the live link")
+					}
+					ended := make(chan federation.Reply, 1)
+					if code := alpha.directory.postFederation(federation.OwnerEndCall{Value: federation.OwnerEnd{Host: host, SessionID: owner.id, Lifetime: owner.token}, Reply: ended}); code != 0 {
+						t.Fatalf("owner end not admitted: %d", code)
+					}
+					select {
+					case reply := <-ended:
+						if reply.Error != nil {
+							select {
+							case <-link.done:
+								t.Log("refused spawn's owner end closed the original federation link")
+							case <-time.After(time.Second):
+								t.Fatal("owner-end error did not settle its original link")
+							}
+							t.Fatalf("missing-destination owner end: %v", reply.Error)
+						}
+					case <-time.After(time.Second):
+						t.Fatal("owner end did not return")
+					}
+					// An ordered round trip must still use that exact attachment.
+					hosts := make(chan federation.Reply, 1)
+					link.inbox <- federation.HostsCall{Reply: hosts}
+					select {
+					case reply := <-hosts:
+						if _, err := federation.DecodeHosts(reply); err != nil {
+							t.Fatalf("same federation link lost after no-op end: %v", err)
+						}
+					case <-time.After(time.Second):
+						t.Fatal("same-link continuation did not return")
+					}
+					alpha.directory.mu.Lock()
+					same := alpha.federation == link
+					alpha.directory.mu.Unlock()
+					if !same {
+						t.Fatal("no-op end replaced the federation attachment")
+					}
 				}
 			})
 		}
