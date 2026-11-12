@@ -37,6 +37,7 @@ const (
 const (
 	UnsupportedTransfer = -32018
 	TransferFailed      = -32019
+	UnknownTransfer     = -32020
 )
 
 type ExtraArgument struct {
@@ -65,12 +66,13 @@ type HelloDescription struct {
 }
 
 type WorkerHello struct {
-	SupportsPolicy       bool    `json:"supports_policy,omitempty"`
-	SupportsAvailability bool    `json:"supports_availability,omitempty"`
-	SupportsTransfer     bool    `json:"supports_transfer,omitempty"`
-	Protocol             Integer `json:"protocol"`
-	LaunchToken          string  `json:"launch_token"`
-	HelloDescription     `tstype:",extends"`
+	SupportsUnknownTransfer bool    `json:"supports_unknown_transfer,omitempty"`
+	SupportsPolicy          bool    `json:"supports_policy,omitempty"`
+	SupportsAvailability    bool    `json:"supports_availability,omitempty"`
+	SupportsTransfer        bool    `json:"supports_transfer,omitempty"`
+	Protocol                Integer `json:"protocol"`
+	LaunchToken             string  `json:"launch_token"`
+	HelloDescription        `tstype:",extends"`
 }
 
 // PeerHello is a complete identity assertion; an empty Name omits the native name.

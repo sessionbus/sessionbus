@@ -628,6 +628,7 @@ func (s *session) forwardTransfer(frame protocol.Frame, params any, origin trans
 	reply := make(chan answer, 1)
 	s.requests[frame.ID] = &requestState{frame: frame, pending: 1}
 	s.await(frame.ID, 0, reply, s.identity.done)
+	unknownTransfer := s.unknownTransferCode
 	go func() {
 		response := answer{}
 		if target != "" {
@@ -661,6 +662,9 @@ func (s *session) forwardTransfer(frame protocol.Frame, params any, origin trans
 			response.value = value
 			if err != nil {
 				response.code, response.data = federation.TransferError(err)
+				if unknownTransfer && frame.Method == "transfer.status" && response.code == protocol.TransferFailed {
+					response.code = protocol.UnknownTransfer
+				}
 			}
 		}
 		reply <- response

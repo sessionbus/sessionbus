@@ -4,7 +4,7 @@ package protocol
 import "testing"
 
 func TestTransferRefusalErrorsAreStrictAndDecodable(t *testing.T) {
-	for code, message := range map[int]string{-32018: "unsupported_transfer", -32019: "transfer_failed"} {
+	for code, message := range map[int]string{-32018: "unsupported_transfer", -32019: "transfer_failed", -32020: "unknown_transfer"} {
 		raw, err := ErrorBytes(17, code, nil)
 		if err != nil {
 			t.Errorf("%s cannot encode: %v", message, err)

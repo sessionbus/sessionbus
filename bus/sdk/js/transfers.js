@@ -3,7 +3,7 @@
 
 const { createHash } = require("node:crypto");
 const { basename } = require("node:path");
-const { CAPABILITY, CHUNK_BYTES, CREDIT_BYTES, MAX_PENDING, MAX_ACTIVE, MAX_BYTES } = require("./transfer-protocol.js");
+const { CAPABILITY, UNKNOWN_INFO_KEY, CHUNK_BYTES, CREDIT_BYTES, MAX_PENDING, MAX_ACTIVE, MAX_BYTES } = require("./transfer-protocol.js");
 const { validate } = require("./schema.js");
 const { FilesystemTransferExecutor } = require("./transfer-filesystem.js");
 
@@ -15,6 +15,7 @@ const { FilesystemTransferExecutor } = require("./transfer-filesystem.js");
 const ErrTransferCommitUnknown = new Error("transfer_commit_unknown");
 const unsupported = () => new Error("unsupported_transfer");
 const conflict = () => new Error("transfer_binding_conflict");
+const unknown = () => new Error("unknown_transfer");
 const deferred = () => { let resolve; const promise = new Promise(yes => { resolve = yes; }); return { promise, resolve }; };
 function waitSignal(promise, signal) {
   if (!signal) return promise;
@@ -70,7 +71,7 @@ class Transfers {
     return g;
   }
   async helloObserved(wire, identity, generationSignal, signal, seen) {
-    const hello = { protocol: 1, ...identity, info: { ...identity.info, sessionbus_transfer: 1, sessionbus_availability: 1, sessionbus_policy: 1 } };
+    const hello = { protocol: 1, ...identity, info: { ...identity.info, sessionbus_transfer: 1, [UNKNOWN_INFO_KEY]: 1, sessionbus_availability: 1, sessionbus_policy: 1 } };
     return wire.call("session.hello", hello, signal, result => {
       if (generationSignal?.aborted) throw generationSignal.reason || new Error("aborted");
       const enabled = result.capabilities?.includes(CAPABILITY) === true;
@@ -119,7 +120,9 @@ class Transfers {
     if (signal?.aborted) return Promise.reject(signal.reason || new Error("aborted"));
     if (!pathValid(path)) return Promise.reject(conflict());
     const g = this._generation(), b = g.bindings.get(id);
-    if (!b || b.ended || b.role === "source" && overwrite || b.path && (b.path !== path || b.overwrite !== overwrite)) return Promise.reject(conflict());
+    if (!b) return Promise.reject(unknown());
+    if (b.role === "source" && overwrite || b.path && (b.path !== path || b.overwrite !== overwrite)) return Promise.reject(conflict());
+    if (b.ended) return Promise.reject(unknown());
     b.path = path; b.overwrite = overwrite;
     if (b.role === "destination") b.destinationProjection = path;
     return waitSignal(g.wire.call("transfer.accept", { id }, g.controller.signal), signal);
@@ -132,7 +135,8 @@ class Transfers {
     if (Object.hasOwn(args,"overwrite") && typeof args.overwrite !== "boolean") return Promise.reject(conflict());
     if (action === "transfer.accept") {
       const b = this._generation().bindings.get(args.id);
-      if (!b || Boolean(args.source) === Boolean(args.destination) || b.role === "source" && args.overwrite) return Promise.reject(conflict());
+      if (!b) return Promise.reject(unknown());
+      if (Boolean(args.source) === Boolean(args.destination) || b.role === "source" && args.overwrite) return Promise.reject(conflict());
       return this.accept({ id: args.id, path: b.role === "source" ? args.source : args.destination, overwrite: args.overwrite }, signal);
     }
     return this[action.slice(9)](args,signal);

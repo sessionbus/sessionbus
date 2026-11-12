@@ -180,7 +180,7 @@ func TestOutgoingErrorLoggingHasFiniteCodeDomain(t *testing.T) {
 	cmd := exec.Command(os.Args[0], "-test.run=^TestOutgoingErrorLoggingHasFiniteCodeDomain$")
 	cmd.Env = append(os.Environ(), "SESSIONBUS_TEST_FINITE_ERROR_LOG_CHILD=1")
 	out, err := cmd.CombinedOutput()
-	if err != nil || strings.Count(string(out), "cannot encode daemon RPC error") != 22 || !strings.Contains(string(out), "code=987654321987654321987654321;") || strings.Contains(string(out), "SECRET_PAYLOAD") {
+	if err != nil || strings.Count(string(out), "cannot encode daemon RPC error") != 23 || !strings.Contains(string(out), "code=987654321987654321987654321;") || strings.Contains(string(out), "SECRET_PAYLOAD") {
 		t.Fatalf("finite logging=%s error=%v", out, err)
 	}
 }

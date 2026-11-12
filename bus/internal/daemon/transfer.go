@@ -155,6 +155,7 @@ func (s *session) transferRequest(frame protocol.Frame, params any) {
 	reply := make(chan answer, 1)
 	s.requests[frame.ID] = &requestState{frame: frame, pending: 1}
 	s.await(frame.ID, 0, reply, s.identity.done)
+	unknownTransfer := s.unknownTransferCode
 	go func() {
 		engine := s.daemon.transfers
 		var value any
@@ -195,6 +196,9 @@ func (s *session) transferRequest(frame protocol.Frame, params any) {
 		response := answer{value: value}
 		if err != nil {
 			response.code = protocol.TransferFailed
+			if unknownTransfer && frame.Method == "transfer.status" && errors.Is(err, transfer.ErrUnknown) {
+				response.code = protocol.UnknownTransfer
+			}
 			if errors.Is(err, transfer.ErrStartUnconfirmed) {
 				response.code, response.data = protocol.Internal, "transfer_unavailable"
 			}

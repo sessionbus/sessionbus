@@ -2,6 +2,7 @@
 "use strict";
 
 const CAPABILITY = "transfer/1", TOKEN_PREFIX = "sbt1:";
+const UNKNOWN_INFO_KEY = "sessionbus_unknown_transfer", UNKNOWN_TOKEN_PREFIX = "sbt1:av1:fp1:ut1:";
 const CHUNK_BYTES = 65536, CREDIT_BYTES = 262144, FRAME_BYTES = 90112, METADATA_BYTES = 8192;
 const MAX_PENDING = 8, MAX_ACTIVE = 2, MAX_BYTES = 1 << 30;
 const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -26,4 +27,4 @@ function transferValueValid(method, value, params = true) {
 function transferFrameFits(method, bytes, params = true) {
   return bytes <= (method.startsWith("transfer.") ? params && method === "transfer.chunk" ? FRAME_BYTES : METADATA_BYTES : 1 << 20);
 }
-module.exports = { MAX_PENDING, MAX_ACTIVE, MAX_BYTES, CAPABILITY, TOKEN_PREFIX, CHUNK_BYTES, CREDIT_BYTES, FRAME_BYTES, METADATA_BYTES, transferValueValid, transferFrameFits };
+module.exports = { MAX_PENDING, MAX_ACTIVE, MAX_BYTES, CAPABILITY, TOKEN_PREFIX, UNKNOWN_INFO_KEY, UNKNOWN_TOKEN_PREFIX, CHUNK_BYTES, CREDIT_BYTES, FRAME_BYTES, METADATA_BYTES, transferValueValid, transferFrameFits };

@@ -271,12 +271,13 @@ func (p *Peer) helloObserved(ctx context.Context, wire *rpc.Conn, identity PeerI
 		hello := identity
 		hello.Info = make(map[string]any, len(identity.Info)+1)
 		for key, value := range identity.Info {
-			if key != protocol.TransferInfoKey {
+			if key != protocol.TransferInfoKey && key != protocol.UnknownTransferInfoKey {
 				hello.Info[key] = value
 			}
 		}
 		if p.Transfers != nil {
 			hello.Info[protocol.TransferInfoKey] = 1
+			hello.Info[protocol.UnknownTransferInfoKey] = 1
 		}
 		hello.Info[protocol.AvailabilityInfoKey] = 1
 		hello.Info[protocol.PolicyInfoKey] = 1

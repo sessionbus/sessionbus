@@ -174,3 +174,68 @@ func TestCapturedReceiverProjectionWaitsOffReaderForPublicationFact(t *testing.T
 		t.Fatal("source gained receiver path")
 	}
 }
+
+// The same oracle compiles on the released SDK: only the missing/ended words
+// differ. Nil wire makes any unexpected accept dispatch fail immediately.
+func TestAcceptUnknownBindingAndEndedRemainDistinctFromWrongFields(t *testing.T) {
+	g, b, _ := localTransferBinding(t, nil)
+	g.owner.current = g
+	ctx := context.Background()
+	require := func(label, want string, err error) {
+		t.Helper()
+		if err == nil || err.Error() != want {
+			t.Errorf("%s = %v, want %s", label, err, want)
+		}
+	}
+	_, err := g.owner.Accept(ctx, "absent", "local-only", false)
+	require("direct absent", "unknown_transfer", err)
+	_, err = g.owner.Action(ctx, "transfer.accept", json.RawMessage(`{"id":"absent","source":"local-only"}`))
+	require("action absent", "unknown_transfer", err)
+	_, err = g.owner.Accept(ctx, "absent", "", false)
+	require("empty path precedence", "transfer_binding_conflict", err)
+	for _, raw := range []string{
+		`{"id":"owned","source":"local-only","destination":"other"}`,
+		`{"id":"owned","destination":"other"}`,
+		`{"id":"owned","source":"local-only","overwrite":true}`,
+		`{"id":"owned"}`,
+	} {
+		_, err = g.owner.Action(ctx, "transfer.accept", json.RawMessage(raw))
+		require(raw, "transfer_binding_conflict", err)
+	}
+	source := &heldCleanupSource{entered: make(chan struct{}), release: make(chan struct{})}
+	b.source = source
+	ended := make(chan struct{})
+	go func() { g.end(b); close(ended) }()
+	released := false
+	defer func() {
+		if !released {
+			close(source.release)
+		}
+		await(t, ended, "held end completion")
+		await(t, b.retired, "held binding retirement")
+	}()
+	await(t, source.entered, "actual source Close")
+	if g.binding(b.id) != b || g.owner.pending != 1 {
+		t.Fatal("ended binding was not actually retained and charged")
+	}
+	_, err = g.owner.Accept(ctx, b.id, b.path, false)
+	require("retained ended", "unknown_transfer", err)
+	_, err = g.owner.Action(ctx, "transfer.accept", json.RawMessage(`{"id":"owned","source":"local-only"}`))
+	require("action retained ended", "unknown_transfer", err)
+	for _, input := range []struct {
+		path      string
+		overwrite bool
+	}{{"different", false}, {b.path, true}, {"", false}} {
+		_, err = g.owner.Accept(ctx, b.id, input.path, input.overwrite)
+		require("ended wrong path/overwrite", "transfer_binding_conflict", err)
+	}
+	close(source.release)
+	released = true
+	await(t, ended, "actual Close completion")
+	await(t, b.retired, "actual binding retirement")
+	_, err = g.owner.Accept(ctx, b.id, b.path, false)
+	require("retired missing", "unknown_transfer", err)
+	if source.closed.Load() != 1 || g.owner.pending != 0 || g.owner.active != 0 {
+		t.Fatal("cleanup/accounting changed", source.closed.Load(), g.owner.pending, g.owner.active)
+	}
+}

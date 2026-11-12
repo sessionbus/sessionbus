@@ -9,7 +9,7 @@ const { ACTIONS, Caller } = require("./caller.js");
 const { Connection, ProtocolError } = require("./connection.js");
 const { schema, validate, encode } = require("./schema.js");
 const { Transfers, ErrTransferCommitUnknown } = require("./transfers.js");
-const { TOKEN_PREFIX, CAPABILITY } = require("./transfer-protocol.js");
+const { TOKEN_PREFIX, CAPABILITY, UNKNOWN_INFO_KEY, UNKNOWN_TOKEN_PREFIX } = require("./transfer-protocol.js");
 
 const ENV = ["SESSIONBUS_LAUNCH_TOKEN", "SESSIONBUS_LOCAL_KEY", "SESSIONBUS_SOCKET"];
 const never = new Promise(() => {});
@@ -61,7 +61,7 @@ class Worker {
       this.connection = new Connection(stream, true, (request) => this._handle(request));
       this.connection.signal.addEventListener("abort", () => this.controller.abort(this.connection.signal.reason), { once: true });
       const supportsTransfer = this.transfers && token.startsWith(TOKEN_PREFIX);
-      await this.connection.call("session.hello", { protocol: 1, launch_token: token, ...hello, ...(supportsTransfer ? { supports_transfer: true } : {}), ...(token.startsWith("sbt1:av1:") ? { supports_availability: true } : {}), ...(token.startsWith("sbt1:av1:fp1:") ? { supports_policy: true } : {}) }, this.controller.signal, result => {
+      await this.connection.call("session.hello", { protocol: 1, launch_token: token, ...hello, ...(supportsTransfer ? { supports_transfer: true } : {}), ...(token.startsWith("sbt1:av1:") ? { supports_availability: true } : {}), ...(token.startsWith("sbt1:av1:fp1:") ? { supports_policy: true } : {}), ...(supportsTransfer && token.startsWith(UNKNOWN_TOKEN_PREFIX) ? { supports_unknown_transfer: true } : {}) }, this.controller.signal, result => {
         this.transfers?.attach(this.connection, this.controller.signal, supportsTransfer && result.capabilities?.includes(CAPABILITY) === true);
       }); cause = await this.connection.done; throw cause;
     } finally { this.run?.finish?.(); try { await this.transfers?.closeConnectionGeneration(); await this._closeProduct(); } finally { this.finish(cause); } }
@@ -256,7 +256,7 @@ class Peer {
     try { await this._hello(connection); } catch (error) { if (this._failHello(error, connection)) return never; connection.close(); }
     if (!connection.signal.aborted) void connection.done.then(() => this._lost(connection)); else this._lost(connection);
   }
-  async _hello(connection, identity = this.identity, acknowledged) { for (;;) { let installed = false; const info = { ...identity.info, sessionbus_availability: 1, sessionbus_policy: 1 }; delete info.sessionbus_transfer; if (this.transfers) info.sessionbus_transfer = 1; const result = await connection.call("session.hello", { protocol: 1, ...identity, info }, undefined, helloResult => {
+  async _hello(connection, identity = this.identity, acknowledged) { for (;;) { let installed = false; const info = { ...identity.info, sessionbus_availability: 1, sessionbus_policy: 1 }; delete info.sessionbus_transfer; delete info[UNKNOWN_INFO_KEY]; if (this.transfers) { info.sessionbus_transfer = 1; info[UNKNOWN_INFO_KEY] = 1; } const result = await connection.call("session.hello", { protocol: 1, ...identity, info }, undefined, helloResult => {
     if (this.wire !== connection || this.terminal) throw new Error("not connected");
     if (identity === this.identity) { if (this.admitted?.session_id !== identity.session_id || !this.identityController || this.identityController.signal.aborted) this.identityController = new AbortController(); this.admitted = identity; this.connection = connection; this.transfers?.attach(connection, this.identityController.signal, helloResult.capabilities?.includes(CAPABILITY) === true); installed = true; }
   }); if (installed) { acknowledged?.(); return result; } identity = this.identity; } }

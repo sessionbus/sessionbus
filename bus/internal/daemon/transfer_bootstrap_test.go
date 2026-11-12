@@ -19,6 +19,7 @@ func TestTransferNegotiationRemainsPrivateAndDoesNotMutateHello(t *testing.T) {
 	}{
 		{name: "nil"},
 		{name: "empty", input: map[string]any{}, want: map[string]any{}},
+		{name: "unknown-transfer reserved key", input: map[string]any{protocol.TransferInfoKey: 1, "sessionbus_unknown_transfer": 1}, want: map[string]any{}, capable: true},
 		{name: "only capability", input: map[string]any{protocol.TransferInfoKey: 1}, want: map[string]any{}, capable: true},
 		{name: "product metadata", input: map[string]any{"ready": true, "nested": map[string]any{"cwd": "/work"}, protocol.TransferInfoKey: float64(1)}, want: map[string]any{"ready": true, "nested": map[string]any{"cwd": "/work"}}, capable: true},
 		{name: "JSON number", input: map[string]any{protocol.TransferInfoKey: json.Number("1"), "revision": 2}, want: map[string]any{"revision": 2}, capable: true},

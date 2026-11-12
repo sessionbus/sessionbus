@@ -113,6 +113,7 @@ func (s *session) peerHello(frame protocol.Frame, hello *protocol.PeerHello) {
 		displaced.wire.Close()
 	}
 	s.supportsTransfer = transferOptIn(hello.Info)
+	s.unknownTransferCode = s.supportsTransfer && capabilityOptIn(hello.Info, protocol.UnknownTransferInfoKey)
 	s.supportsAvailability = capabilityOptIn(hello.Info, protocol.AvailabilityInfoKey)
 	s.supportsPolicy = capabilityOptIn(hello.Info, protocol.PolicyInfoKey)
 	result := protocol.HelloResult{}

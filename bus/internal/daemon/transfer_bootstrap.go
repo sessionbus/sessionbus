@@ -31,6 +31,7 @@ func capabilityOptIn(info map[string]any, key string) bool {
 func peerPublicInfo(info map[string]any) map[string]any {
 	public := maps.Clone(info)
 	delete(public, protocol.TransferInfoKey)
+	delete(public, protocol.UnknownTransferInfoKey)
 	delete(public, protocol.AvailabilityInfoKey)
 	delete(public, protocol.PolicyInfoKey)
 	return public

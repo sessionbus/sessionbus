@@ -498,6 +498,9 @@ func peerPipe(t *testing.T) (chan *rpc.Request, *rpc.Conn, net.Conn) {
 func assertPeerHello(t *testing.T, request *rpc.Request, name, nested string) {
 	t.Helper()
 	hello := request.Params.(*protocol.PeerHello)
+	if hello.Info["sessionbus_unknown_transfer"] != float64(1) {
+		t.Error("standard SDK hello did not advertise unknown-transfer decoding")
+	}
 	if hello.Name != name || nested != "" && hello.Info["nested"].(map[string]any)["value"] != nested {
 		t.Fatalf("hello = %#v", hello)
 	}

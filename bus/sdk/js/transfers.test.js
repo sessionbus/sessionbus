@@ -139,6 +139,7 @@ test("legacy daemon and unattached raw caller refuse transfers locally, preservi
   await f.transfers.helloObserved(f.client,{session_id:"source@local",product:"test",groups:[],info:{}},f.scope.signal);
   assert.throws(() => f.transfers.offer({target:"destination@local",source:"/private/source",name:"file"}),/unsupported_transfer/);
   assert.equal(f.incoming[0].params.info.sessionbus_transfer,1);
+  assert.equal(f.incoming[0].params.info.sessionbus_unknown_transfer,1);
   await assert.rejects(new Caller(f.client).action("transfer.offer",{target:"target",source:"/private/path"}),/unsupported_transfer/);
   assert.deepEqual(await f.client.call("session.list",{}),{sessions:[]});
 });
@@ -262,13 +263,13 @@ test("late accepted snapshot cannot recreate a terminally retired local binding"
   await f.bus.call("transfer.notice",{kind:"offer",id:"one",name:"file",from:{session_id:"source@local",product:"fixture",groups:[]}});
   assert.equal((await f.transfers.accept({id:"one",path:"/local/destination"})).state,"streaming");
   assert.equal(f.transfers.current.bindings.size,0); assert.equal(aborts,1);
-  await assert.rejects(f.transfers.accept({id:"one",path:"/local/destination"}),/transfer_binding_conflict/);
+  await assert.rejects(f.transfers.accept({id:"one",path:"/local/destination"}),/unknown_transfer/);
   assert.equal(f.incoming.length,1);
 });
 
 
 test("policy worker bootstrap declares only on the versioned policy token", { timeout: 2000 }, async t => {
-  for (const token of ["legacy-random", "sbt1:random", "sbt1:av1:token-old", "sbt1:av1:fp1:token-new"]) {
+  for (const token of ["legacy-random", "sbt1:random", "sbt1:av1:token-old", "sbt1:av1:fp1:token-old", "sbt1:av1:fp1:ut1:token-new"]) {
     const [client, server] = pair(), got = deferred(); let bus;
     bus = new Connection(server,false,r => { got.resolve(r.params); void bus.result(r,{}); });
     const worker = new Worker({hello:() => ({product:"fixture",supported_open_fields:[],extra_arguments:[]})},{SESSIONBUS_SOCKET:"fixture",SESSIONBUS_LAUNCH_TOKEN:token},{connect:() => client});
@@ -276,6 +277,8 @@ test("policy worker bootstrap declares only on the versioned policy token", { ti
     t.after(async () => { worker.shutdown(); bus.close(); await serving; });
     assert.equal(hello.supports_transfer,token.startsWith("sbt1:")?true:undefined);
     assert.equal(hello.supports_policy,token.startsWith("sbt1:av1:fp1:")?true:undefined);
+    assert.equal(hello.supports_availability,token.startsWith("sbt1:av1:")?true:undefined);
+    assert.equal(hello.supports_unknown_transfer,token.startsWith("sbt1:av1:fp1:ut1:")?true:undefined);
     assert.equal(hello.launch_token,token);
     worker.shutdown(); bus.close(); await serving;
   }
@@ -322,4 +325,43 @@ for (const [ending, throws] of [["shutdown", false], ["invalid hello", false], [
   release.resolve(); await peer.closed;
   assert.equal(disposed, true); assert.equal(closed, 1);
   await new Promise(resolve => setImmediate(resolve)); assert.deepEqual(unhandled, []);
+});
+
+
+test("accept missing bindings use unknown locally and invalid paths keep conflict", {timeout:2000},async t=>{
+ const f=fixture(t,noExecutor);
+ await assert.rejects(f.transfers.accept({id:"absent",path:"/local/source"}),{message:"unknown_transfer"});
+ await assert.rejects(f.transfers.action("transfer.accept",{id:"absent",source:"/local/source"}),{message:"unknown_transfer"});
+ await assert.rejects(f.transfers.accept({id:"absent",path:""}),{message:"transfer_binding_conflict"});
+ assert.equal(f.incoming.length,0);assert.equal(f.transfers.pending,0);assert.equal(f.transfers.active,0);
+});
+
+// Existing SDK pair and real terminal cleanup gate; no synthetic terminal flag.
+test("accept retained-ended bindings use unknown without masking field conflicts", { timeout: 2000 }, async t => {
+ const entered=deferred(), release=deferred();let closed=0;
+ const f=fixture(t,{...noExecutor,openTransferSource:async()=>({size:()=>0,verify:()=>{},read:()=>0,close:async()=>{closed++;entered.resolve();await release.promise;}})},async r=>r.method==="session.list"?{sessions:[]}:descriptor("one"));
+ try {
+ await f.transfers.offer({target:"destination@local",source:"/local/source"});
+ for(const args of [
+  {id:"one",source:"/local/source",destination:"/local/other"},
+  {id:"one",destination:"/local/other"},
+  {id:"one",source:"/local/source",overwrite:true},
+  {id:"one"},
+ ]) await assert.rejects(f.transfers.action("transfer.accept",args),{message:"transfer_binding_conflict"});
+ await f.bus.call("transfer.prepare",{id:"one",role:"source"});
+ const binding=f.transfers.current.bindings.get("one");
+ const ending=f.bus.call("transfer.notice",{kind:"terminal",id:"one",outcome:"cancelled",bytes:0});
+ void ending.catch(()=>{});
+ await entered.promise;
+ assert.equal(binding.ended,true);assert.equal(f.transfers.current.bindings.get("one"),binding);assert.equal(f.transfers.pending,0);assert.equal(f.transfers.active,1);
+ await assert.rejects(f.transfers.accept({id:"one",path:"/local/source"}),{message:"unknown_transfer"});
+ await assert.rejects(f.transfers.action("transfer.accept",{id:"one",source:"/local/source"}),{message:"unknown_transfer"});
+ for(const args of [{id:"one",path:"/other"},{id:"one",path:"/local/source",overwrite:true},{id:"one",path:""}])
+  await assert.rejects(f.transfers.accept(args),{message:"transfer_binding_conflict"});
+ assert.equal(f.incoming.length,1);
+ release.resolve();await ending;
+ await assert.rejects(f.transfers.accept({id:"one",path:"/local/source"}),{message:"unknown_transfer"});
+ assert.equal(f.transfers.pending,0);assert.equal(f.transfers.active,0);assert.equal(closed,1);
+ assert.deepEqual(await f.client.call("session.list",{}),{sessions:[]});
+ } finally {release.resolve();}
 });
