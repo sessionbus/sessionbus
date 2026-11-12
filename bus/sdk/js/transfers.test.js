@@ -2,7 +2,7 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
-const { Connection, Caller, Worker, Transfers, ErrTransferCommitUnknown } = require("./index.js");
+const { Connection, Caller, Worker, Transfers, ErrTransferCommitUnknown, connectPeer } = require("./index.js");
 const { pair, deferred } = require("./test-support.js");
 const sourceText = Buffer.from("checked source, never a model message"), hash = createHash("sha256").update(sourceText).digest("hex");
 function fixture(t, executor, handler = async () => ({})) {
@@ -279,4 +279,47 @@ test("policy worker bootstrap declares only on the versioned policy token", { ti
     assert.equal(hello.launch_token,token);
     worker.shutdown(); bus.close(); await serving;
   }
+});
+
+// All terminal Peer paths use the same finish step. A public closed witness
+// must include the SDK cleanup, even when an admitted source closes slowly.
+for (const [ending, throws] of [["shutdown", false], ["invalid hello", false], ["superseded", false], ["shutdown", true]]) test(`peer ${ending}${throws ? " with failed source close" : ""} waits for admitted transfer retirement before closed`, { timeout: 2000 }, async t => {
+  const entered = deferred(), release = deferred(), [client, server] = pair(), unhandled = [];
+  const onUnhandled = error => unhandled.push(error);
+  process.on("unhandledRejection", onUnhandled);
+  t.after(() => process.off("unhandledRejection", onUnhandled));
+  let closed = 0, rejectedHello = false, bus;
+  const executor = { ...noExecutor, openTransferSource: async () => ({
+    size: () => 0, read: () => 0, verify: () => {},
+    close: async () => { closed++; entered.resolve(); await release.promise; if (throws) throw new Error("executor close failed"); },
+  }) };
+  bus = new Connection(server, false, request => {
+    if (request.method === "session.hello") {
+      if (rejectedHello) void bus.error(request, -32602);
+      else void bus.result(request, { capabilities: ["transfer/1"] });
+    } else if (request.method === "transfer.offer") void bus.result(request, descriptor("one"));
+    else if (request.method === "session.list") void bus.result(request, { sessions: [] });
+    else assert.fail(`unexpected request ${request.method}`);
+  });
+  const peer = connectPeer({ session_id: "source@local", product: "test", groups: [], info: {} }, async () => ({ disposition: "written" }), { SESSIONBUS_SOCKET: "fixture" }, { connect: () => client, schedule: () => assert.fail("terminal peer reconnected"), transferExecutor: executor });
+  t.after(async () => { release.resolve(); peer.shutdown(); bus.close(); await peer.closed; });
+  await peer.ready;
+  await peer.caller.action("transfer.offer", { target: "destination@local", source: "/local/source" });
+  await bus.call("transfer.prepare", { id: "one", role: "source" });
+  assert.deepEqual(await peer.caller.list(), { sessions: [] });
+  let disposed = false; peer.closed.then(() => { disposed = true; });
+  if (ending === "shutdown") peer.shutdown();
+  else if (ending === "invalid hello") {
+    rejectedHello = true;
+    await assert.rejects(peer.rehello(undefined, "renamed", {}), { code: -32602 });
+  } else void bus.call("session.superseded", {}).catch(() => {});
+  await entered.promise;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(closed, 1);
+  assert.equal(disposed, false, "closed resolved before the admitted source retired");
+  peer.shutdown(); // repeated terminal paths cannot release the witness early.
+  await Promise.resolve(); assert.equal(disposed, false);
+  release.resolve(); await peer.closed;
+  assert.equal(disposed, true); assert.equal(closed, 1);
+  await new Promise(resolve => setImmediate(resolve)); assert.deepEqual(unhandled, []);
 });

@@ -223,7 +223,7 @@ class Peer {
     this.error = null;
     this.admitted = null;
     this.identityController = null;
-    this.closed = new Promise((resolve) => { this.finish = resolve; });
+    this.closed = new Promise((resolve) => { this.finish = async () => { await this.transfers.closeConnectionGeneration(); resolve(); }; });
     this.ready = this._open();
     this.caller = new Caller(this, options.caller);
   }
