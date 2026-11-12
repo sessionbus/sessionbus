@@ -38,7 +38,8 @@ func TestPreIDTransferCancellationRefusesWithoutLosingCaller(t *testing.T) {
 		}
 	}
 	err := source.call("transfer.status", protocol.TransferTarget{ID: "unknown"}, nil)
-	if rpcCode(err) != protocol.TransferFailed {
+	// TestUnknownTransferStatusLocalAndForwardedEnded retains non-opted legacy status coverage.
+	if rpcCode(err) != protocol.UnknownTransfer {
 		t.Fatal("ordinary unknown transfer changed", err)
 	}
 }

@@ -7,6 +7,8 @@ package protocol
 const (
 	TransferCapability                     = "transfer/1"
 	TransferInfoKey                        = "sessionbus_transfer"
+	UnknownTransferInfoKey                 = "sessionbus_unknown_transfer"
+	UnknownTransferTokenPrefix             = PolicyTokenPrefix + "ut1:"
 	TransferTokenPrefix                    = "sbt1:"
 	MaxTransferBytes                 int64 = 1 << 30
 	TransferChunkBytes                     = 64 << 10

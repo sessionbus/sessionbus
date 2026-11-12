@@ -114,7 +114,12 @@ func TestTransferUnknownRefusalKeepsConnection(t *testing.T) {
 			_, socket := startDaemon(t)
 			peer := connectPeer(t, socket, "sender", "sender", "shared")
 			err := peer.call(method, protocol.TransferTarget{ID: "unknown"}, nil)
-			if rpcCode(err) != -32019 {
+			// TestUnknownTransferStatusLocalAndForwardedEnded retains non-opted legacy status coverage.
+			want := -32019
+			if method == "transfer.status" {
+				want = -32020
+			}
+			if rpcCode(err) != want {
 				t.Fatal("unknown transfer lost valid refusal", err)
 			}
 			var rows protocol.SessionListResult

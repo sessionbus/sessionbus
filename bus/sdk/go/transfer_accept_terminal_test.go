@@ -84,7 +84,7 @@ func TestLateAcceptSnapshotCannotRecreateRetiredBinding(t *testing.T) {
 	if pending != 0 || active != 0 {
 		t.Fatal("late response recharged a retired slot", pending, active)
 	}
-	if _, err = transfers.Accept(ctx, "one", destination, false); !errors.Is(err, ErrTransferBinding) || accepts.Load() != 1 {
+	if _, err = transfers.Accept(ctx, "one", destination, false); !errors.Is(err, ErrUnknownTransfer) || accepts.Load() != 1 {
 		t.Fatal("retired transfer was accepted again", err, accepts.Load())
 	}
 	if _, err = os.Stat(destination); !errors.Is(err, os.ErrNotExist) {

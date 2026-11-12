@@ -858,7 +858,8 @@ protocol rejection retain their existing connection cleanup.
 | `-32016` | `unsupported_trace` | `trace.configure` or `lane.spawn.trace` when an involved federated host or hub cannot carry or enforce tracing. Upgrade every involved daemon and hub before retrying. |
 | `-32017` | `federation_policy_denied` | Hub group or lane policy refused admission; only for policy-capable kits and hops. Older recipients get `unknown_session`. |
 | `-32018` | `unsupported_transfer` | `transfer.*` when a sender, target, route or SDK generation cannot take transfers; no data. A sender that did not opt into transfers receives the existing `unsupported_open_field` refusal instead. |
-| `-32019` | `transfer_failed` | `transfer.*` when the transfer ID, participant role or current state cannot admit that operation; no data. This is an operation refusal, not publication knowledge or replay authority. Capacity uses `busy` without data. |
+| `-32019` | `transfer_failed` | `transfer.*` when the transfer ID, participant role or current state cannot admit that operation; no data. Legacy `transfer.status` uses this for an absent, ended or inaccessible ID. This is an operation refusal, not publication knowledge or replay authority. Capacity uses `busy` without data. |
+| `-32020` | `unknown_transfer` | Opted-in local `transfer.status` when no accessible live transfer exists, including an ended ID; no data. This supplies no terminal outcome or replay authority. Other methods and non-opting connections retain `transfer_failed`. |
 | `-32603` | `internal` | The daemon's own shutdown or durable row-file operation fails; `data` carries its error text. An explicit uncertain-delivery callback may also use this code; it never certifies native refusal. |
 
 ### 1.6 Negotiated endpoint-local file transfers
@@ -884,7 +885,25 @@ matching peer-common and codex-peer set. An older unreleased transfer-capable
 kit rejects the new error codes and closes its connection; ordinary capability
 opt-in does not establish mixed-version compatibility.
 
-A received semantic refusal keeps its explicit code across the bridge, including
+The distinct `unknown_transfer` status refusal is separately negotiated with
+`info.sessionbus_unknown_transfer:1` alongside the existing transfer opt-in.
+Workers send `supports_unknown_transfer:true` only on an issued
+`sbt1:av1:fp1:ut1:` token. This extends the full older prefix, so old worker
+kits keep their existing transfer, availability and policy flags; new kits omit
+the new field for old tokens. The daemon accepts the flag only with transfer
+support and that prefix. No hello-result capability is added. New kits decode
+both refusal pairs. Old daemons accept the extra peer-info key as ordinary
+metadata and keep their existing answer; current daemons hide the reserved key.
+
+Only the local connection emits `unknown_transfer` for status. Federation and
+the hub keep the legacy error vocabulary; the local daemon translates only the
+status-specific semantic refusal after opt-in. Link loss and capacity remain
+their existing errors, and Accept/Cancel refusals are unchanged. SDK-local accept
+with no live binding also returns `unknown_transfer`; wrong-role, wrong-field and
+invalid-path refusals remain `transfer_binding_conflict`. Neither local absence
+nor status absence replaces a terminal notice or certifies the transfer outcome.
+
+A received semantic refusal keeps its explicit code across federation, including
 create, status, finish and chunk. Cancellation before ID allocation uses `internal` / `transfer_unavailable`; it does not fabricate a cancelled or
 failed transfer. After an allocated descriptor, local binding/role/association
 failure remains unavailable, as do transport loss and ended attachments. Existing

@@ -24,6 +24,9 @@ func TestSameWireHelloUsesNativeIdentityLifetime(t *testing.T) {
 		go func() {
 			switch r.Method {
 			case "session.hello":
+				if r.Params.(*protocol.PeerHello).Info["sessionbus_unknown_transfer"] != float64(1) {
+					t.Error("raw SDK hello did not advertise unknown-transfer decoding")
+				}
 				_ = server.Result(r, protocol.HelloResult{Capabilities: []string{protocol.TransferCapability}})
 			case "transfer.offer":
 				_ = server.Result(r, protocol.TransferDescriptor{ID: fmt.Sprint(offers.Add(1)), Sender: "source@local", Receiver: "other@local", CreatedBy: "source", Name: "file", State: "offered"})

@@ -75,6 +75,7 @@ type session struct {
 	stopAuto                              func()
 
 	supportsTransfer     bool
+	unknownTransferCode  bool
 	supportsAvailability bool
 	supportsPolicy       bool
 	daemon               *Daemon
@@ -295,6 +296,10 @@ func (s *session) firstHello(frame protocol.Frame) {
 	case *protocol.PeerHello:
 		s.peerHello(frame, hello)
 	case *protocol.WorkerHello:
+		if hello.SupportsUnknownTransfer && (!hello.SupportsTransfer || !strings.HasPrefix(hello.LaunchToken, protocol.UnknownTransferTokenPrefix)) {
+			s.reject(frame, protocol.InvalidHello)
+			return
+		}
 		if hello.SupportsPolicy && !strings.HasPrefix(hello.LaunchToken, protocol.PolicyTokenPrefix) {
 			s.reject(frame, protocol.InvalidHello)
 			return
@@ -310,6 +315,7 @@ func (s *session) firstHello(frame protocol.Frame) {
 		}
 		start.claimed <- struct{}{}
 		s.supportsTransfer = hello.SupportsTransfer && strings.HasPrefix(hello.LaunchToken, protocol.TransferTokenPrefix)
+		s.unknownTransferCode = s.supportsTransfer && hello.SupportsUnknownTransfer
 		s.supportsAvailability = hello.SupportsAvailability
 		s.supportsPolicy = hello.SupportsPolicy
 		s.startLane(start, frame, hello.HelloDescription)

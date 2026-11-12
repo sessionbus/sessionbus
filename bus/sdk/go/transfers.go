@@ -59,6 +59,7 @@ type TransferDestination interface {
 
 var ErrTransferUnsupported = errors.New("unsupported_transfer")
 var ErrTransferBinding = errors.New("transfer_binding_conflict")
+var ErrUnknownTransfer = errors.New("unknown_transfer")
 var ErrTransferCommitUnknown = errors.New("transfer_commit_unknown")
 
 // Transfers keeps source/destination paths entirely local. Its generation owns
@@ -397,7 +398,7 @@ func (t *Transfers) Action(ctx context.Context, action string, args json.RawMess
 			}
 			b := g.binding(p.ID)
 			if b == nil {
-				return protocol.TransferDescriptor{}, ErrTransferBinding
+				return protocol.TransferDescriptor{}, ErrUnknownTransfer
 			}
 			path := p.Destination
 			if b.role == "source" {
@@ -438,7 +439,7 @@ func (t *Transfers) Accept(ctx context.Context, id, path string, overwrite bool)
 	b := g.bindings[id]
 	g.mu.Unlock()
 	if b == nil {
-		return protocol.TransferDescriptor{}, ErrTransferBinding
+		return protocol.TransferDescriptor{}, ErrUnknownTransfer
 	}
 	b.mu.Lock()
 	if b.role == "source" && overwrite {
@@ -451,7 +452,7 @@ func (t *Transfers) Accept(ctx context.Context, id, path string, overwrite bool)
 	}
 	if b.ended {
 		b.mu.Unlock()
-		return protocol.TransferDescriptor{}, ErrTransferBinding
+		return protocol.TransferDescriptor{}, ErrUnknownTransfer
 	}
 	b.path, b.overwrite = path, overwrite
 	if b.role == "destination" {
@@ -825,11 +826,12 @@ func (t *Transfers) HelloObserved(ctx, generation context.Context, wire *Connect
 	hello.Protocol = 1
 	hello.Info = make(map[string]any, len(identity.Info)+1)
 	for key, value := range identity.Info {
-		if key != protocol.TransferInfoKey {
+		if key != protocol.TransferInfoKey && key != protocol.UnknownTransferInfoKey {
 			hello.Info[key] = value
 		}
 	}
 	hello.Info[protocol.TransferInfoKey] = 1
+	hello.Info[protocol.UnknownTransferInfoKey] = 1
 	hello.Info[protocol.AvailabilityInfoKey] = 1
 	hello.Info[protocol.PolicyInfoKey] = 1
 	var result protocol.HelloResult

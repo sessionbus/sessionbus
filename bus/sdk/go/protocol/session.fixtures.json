@@ -240,6 +240,15 @@
     {"name":"availability host is not responding","definition":"HostProducts","valid":true,"value":{"host":"beta","products":[],"availability":"not_responding"}},
     {"name":"availability does not invent other states","definition":"HostProducts","valid":false,"value":{"host":"beta","products":[],"availability":"unknown_host"}},
     {"name":"availability worker token bootstrap","definition":"SessionHelloRequest","valid":true,"value":{"protocol":1,"product":"worker","launch_token":"sbt1:av1:test","supports_availability":true,"supported_open_fields":[],"extra_arguments":[]}},
-    {"name":"availability peer uses info not worker field","definition":"SessionHelloRequest","valid":false,"value":{"protocol":1,"product":"peer","session_id":"native","groups":[],"info":{},"supports_availability":true}}
+    {"name":"availability peer uses info not worker field","definition":"SessionHelloRequest","valid":false,"value":{"protocol":1,"product":"peer","session_id":"native","groups":[],"info":{},"supports_availability":true}},
+    {"name":"unknown transfer strict refusal","definition":"RPCError","valid":true,"value":{"code":-32020,"message":"unknown_transfer"}},
+    {"name":"unknown transfer forbids data","definition":"RPCError","valid":false,"value":{"code":-32020,"message":"unknown_transfer","data":"outcome"}},
+    {"name":"unknown transfer mismatched legacy message","definition":"RPCError","valid":false,"value":{"code":-32020,"message":"transfer_failed"}},
+    {"name":"legacy transfer code rejects new message","definition":"RPCError","valid":false,"value":{"code":-32019,"message":"unknown_transfer"}},
+    {"name":"worker unknown transfer flag","definition":"SessionHelloRequest","valid":true,"value":{"protocol":1,"product":"worker","launch_token":"sbt1:av1:fp1:ut1:token-fixture","supported_open_fields":[],"extra_arguments":[],"supports_transfer":true,"supports_unknown_transfer":true}},
+    {"name":"worker unknown transfer false flag rejected","definition":"SessionHelloRequest","valid":false,"value":{"protocol":1,"product":"worker","launch_token":"sbt1:av1:fp1:ut1:token-fixture","supported_open_fields":[],"extra_arguments":[],"supports_transfer":true,"supports_unknown_transfer":false}},
+    {"name":"peer unknown transfer only in info","definition":"SessionHelloRequest","valid":false,"value":{"protocol":1,"product":"peer","session_id":"native","groups":[],"info":{},"supports_unknown_transfer":true}},
+    {"name":"peer unknown transfer info accepted","definition":"SessionHelloRequest","valid":true,"value":{"protocol":1,"product":"peer","session_id":"native","groups":[],"info":{"sessionbus_transfer":1,"sessionbus_unknown_transfer":1}}},
+    {"name":"hello result gains no unknown transfer capability","definition":"SessionHelloResult","valid":false,"value":{"capabilities":["transfer/1","unknown_transfer/1"]}}
   ]
 }

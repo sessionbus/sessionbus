@@ -89,7 +89,11 @@ func transferU6Refusal(t *testing.T, target string) {
 	for _, method := range []string{"transfer.status", "transfer.cancel", "transfer.accept"} {
 		_, err = source.Call(ctx, method, protocol.TransferTarget{ID: "unknown"})
 		var refusal *protocol.RPCError
-		if !errors.As(err, &refusal) || refusal.Code != -32019 || len(refusal.Data) != 0 {
+		wantCode := -32019
+		if method == "transfer.status" {
+			wantCode = -32020
+		}
+		if !errors.As(err, &refusal) || refusal.Code != wantCode || len(refusal.Data) != 0 {
 			t.Fatalf("%s unknown transfer refusal = %v", method, err)
 		}
 		if _, err = source.Caller.List(ctx, sessionkit.SessionListRequest{}); err != nil {
