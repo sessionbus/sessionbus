@@ -846,7 +846,9 @@ func (s *hubState) ownerEnd(ctx context.Context, inbox chan<- registryEvent, ori
 	}
 	destination := s.links[call.Value.Host]
 	if destination == nil {
-		s.reply(originReply{origin: origin, id: call.ID, value: errorReply(protocol.UnknownHost, nil)})
+		// No attachment remains to receive the end. Destination link loss
+		// already retires its remote owners; persistent lanes keep their policy.
+		s.reply(originReply{origin: origin, id: call.ID, value: emptyReply()})
 		return
 	}
 	call.Value.Source, call.Value.Attachment = origin.host, origin.attachment
